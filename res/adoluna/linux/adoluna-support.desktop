@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Adoluna Support
+GenericName=Remote Support
+Comment=Adoluna remote support (based on RustDesk)
+Exec=adolunasupport %u
+Icon=adoluna-support
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Network;RemoteAccess;GTK;
+Keywords=remote;support;adoluna;remote-desktop;
+StartupWMClass=adolunasupport

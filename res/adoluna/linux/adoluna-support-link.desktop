@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Adoluna Support
+NoDisplay=true
+MimeType=x-scheme-handler/adolunasupport;
+TryExec=adolunasupport
+Exec=adolunasupport %u
+Icon=adoluna-support
+Terminal=false
+Type=Application
+StartupNotify=false
+StartupWMClass=adolunasupport

@@ -1,0 +1,12 @@
+#!/bin/bash
+set -e
+if [ "$1" = configure ]; then
+	ln -f -s /usr/share/adoluna-support/adolunasupport /usr/bin/adolunasupport
+	if [ "$(basename "$(readlink /proc/1/exe)")" = systemd ]; then
+		mkdir -p /usr/lib/systemd/system/
+		cp /usr/share/adoluna-support/files/systemd/adolunasupport.service /usr/lib/systemd/system/adolunasupport.service
+		systemctl daemon-reload
+		systemctl enable adolunasupport
+		systemctl start adolunasupport || true
+	fi
+fi

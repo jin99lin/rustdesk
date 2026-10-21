@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+case $1 in
+	remove|upgrade)
+		rm -f /usr/bin/adolunasupport
+		if [ "$(basename "$(readlink /proc/1/exe)")" = systemd ]; then
+			systemctl stop adolunasupport || true
+			systemctl disable adolunasupport || true
+			rm -f /usr/lib/systemd/system/adolunasupport.service /etc/systemd/system/adolunasupport.service || true
+		fi
+		;;
+esac
+exit 0
