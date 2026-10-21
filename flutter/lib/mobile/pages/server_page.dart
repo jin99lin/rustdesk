@@ -637,7 +637,30 @@ class _PermissionCheckerState extends State<PermissionChecker> {
             serverModel.clipboardOk,
             serverModel.toggleClipboard,
             enabled: !permissionChangeLocked,
-          ),
+          ),          // Adoluna: unattended mode needs these for start-on-boot.
+          FutureBuilder<List<bool>>(
+              future: Future.wait([
+                AndroidPermissionManager.check(
+                    kRequestIgnoreBatteryOptimizations),
+                AndroidPermissionManager.check(kSystemAlertWindow),
+              ]),
+              builder: (context, snap) {
+                final ok = snap.data?.every((e) => e) ?? false;
+                return PermissionRow(
+                    "${translate("Ignore Battery Optimizations")} (Start on boot)",
+                    ok, () async {
+                  if (!await AndroidPermissionManager.check(
+                      kRequestIgnoreBatteryOptimizations)) {
+                    await AndroidPermissionManager.request(
+                        kRequestIgnoreBatteryOptimizations);
+                  }
+                  if (!await AndroidPermissionManager.check(
+                      kSystemAlertWindow)) {
+                    await AndroidPermissionManager.request(kSystemAlertWindow);
+                  }
+                  setState(() {});
+                });
+              }),
         ]));
   }
 }
