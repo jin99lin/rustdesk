@@ -106,7 +106,20 @@ jobs:
           doNotCache: false
       - name: Install vcpkg dependencies
         run: $VCPKG_ROOT/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
+      - name: Prefetch flutter packages (retry on network stall)
+        timeout-minutes: 20
+        run: |
+          cd flutter
+          for i in 1 2 3 4; do
+            if perl -e 'alarm 240; exec @ARGV' flutter pub get; then exit 0; fi
+            echo "pub get attempt $i failed/stalled, retrying"; sleep 15
+          done
+          exit 1
       - name: Build
+        timeout-minutes: 120
+        env:
+          CARGO_NET_RETRY: "10"
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           # Same minimum version on both slices so the universal app has one LSMinimumSystemVersion.
           MIN_MACOS_VERSION="12.3"
