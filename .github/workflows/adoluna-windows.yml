@@ -139,11 +139,13 @@ jobs:
           msbuild-architecture: x86
       - name: Build msi
         run: |
+          if (!(Test-Path ./rustdesk/AdolunaSupport.exe)) { mv ./rustdesk/rustdesk.exe ./rustdesk/AdolunaSupport.exe }
           pushd ./res/msi
           python preprocess.py --arp -d ../../rustdesk --app-name AdolunaSupport --manufacturer Adoluna -v ${{ env.VERSION }}
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
-          $msi = Get-ChildItem ./Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
+          $msi = Get-ChildItem -Recurse ./Package/bin -Filter *.msi | Select-Object -First 1
+          if (!$msi) { throw 'msi not produced' }
           mv $msi.FullName ../../SignOutput/${{ env.APP_FILE }}-${{ env.VERSION }}-x86_64.msi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
