@@ -1159,7 +1159,7 @@ fn get_api_server_(api: String, custom: String) -> String {
             return format!("http://{}", s);
         }
     }
-    "https://admin.rustdesk.com".to_owned()
+    "https://remotesupport.adoluna.com".to_owned() // Adoluna default API server
 }
 
 #[inline]
