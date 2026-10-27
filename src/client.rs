@@ -3000,9 +3000,13 @@ impl LoginConfigHandler {
         // Three scopes: what was decided about this PEER, what this CLIENT is set up as (proxy),
         // and what its TRANSPORT forces (ws). Only the first may be written back to the peer's
         // config — persisting the others would make a local setup a permanent peer property.
-        self.peer_relay =
-            config::option2bool("force-always-relay", &self.get_option("force-always-relay"))
-                || force_relay;
+        // Adoluna: relay by default for every peer (same-intranet LAN path is unreliable behind
+        // our Traefik/WireGuard front); only an explicit "N" opts a peer out.
+        let adoluna_relay_opt = self.get_option("force-always-relay");
+        self.peer_relay = adoluna_relay_opt != "N"
+            && (adoluna_relay_opt.is_empty()
+                || config::option2bool("force-always-relay", &adoluna_relay_opt))
+            || force_relay;
         self.policy_relay = self.peer_relay || Config::is_proxy();
         self.force_relay = self.policy_relay || use_ws();
         if let Some((real_id, server, key)) = &self.other_server {
