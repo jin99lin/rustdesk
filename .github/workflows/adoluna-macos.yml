@@ -159,6 +159,15 @@ jobs:
           done
           cd ..
           lipo -info "${APP}/Contents/MacOS/AdolunaSupport" "${APP}/Contents/Frameworks/liblibrustdesk.dylib" || true
+      - name: Ad-hoc re-sign (unsigned build, fixes FlutterMacOS Team ID mismatch)
+        if: env.MACOS_P12_BASE64 == ''
+        run: |
+          xattr -cr "${APP}"
+          codesign --remove-signature "${APP}" || true
+          find "${APP}/Contents/Frameworks" -depth \( -name "*.framework" -o -name "*.dylib" \) -exec codesign --force --sign - {} \;
+          codesign --force --deep --sign - "${APP}"
+          codesign -v --deep --strict --verbose=2 "${APP}"
+          codesign -dv "${APP}" 2>&1 | grep -E "Signature|TeamIdentifier"
       - name: Import signing certificate
         if: env.MACOS_P12_BASE64 != ''
         uses: apple-actions/import-codesign-certs@253ddeeac23f2bdad1646faac5c8c2832e800071 # v1
