@@ -16,10 +16,25 @@ const val DEBUG_BOOT_COMPLETED = "com.carriez.flutter_hbb.DEBUG_BOOT_COMPLETED"
 class BootReceiver : BroadcastReceiver() {
     private val logTag = "tagBootReceiver"
 
+    companion object {
+        @Volatile
+        var started = false
+    }
+
     override fun onReceive(context: Context, intent: Intent) {
         Log.d(logTag, "onReceive ${intent.action}")
 
-        if (Intent.ACTION_BOOT_COMPLETED == intent.action || DEBUG_BOOT_COMPLETED == intent.action) {
+        val bootActions = setOf(
+            Intent.ACTION_BOOT_COMPLETED, DEBUG_BOOT_COMPLETED,
+            "android.intent.action.QUICKBOOT_POWERON", "com.htc.intent.action.QUICKBOOT_POWERON",
+            "android.intent.action.REBOOT", Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_USER_PRESENT
+        )
+        if (intent.action in bootActions) {
+            // Adoluna: fallback actions may fire repeatedly; only start once per process.
+            if (started || MainService.isStart) {
+                Log.d(logTag, "already started by boot receiver")
+                return
+            }
             // check SharedPreferences config
             val prefs = context.getSharedPreferences(KEY_SHARED_PREFERENCES, FlutterActivity.MODE_PRIVATE)
             if (!prefs.getBoolean(KEY_START_ON_BOOT_OPT, true)) {
@@ -30,9 +45,9 @@ class BootReceiver : BroadcastReceiver() {
             // Adoluna: overlay (SYSTEM_ALERT_WINDOW) is only needed on Android 10+ to launch the
             // screen-capture consent activity from background. Below Android 10 (e.g. Sunmi K2_MINI)
             // background activity starts are allowed, so don't require it (floating window is off).
+            // Adoluna: some ROMs misreport this; log only, start anyway.
             if (!XXPermissions.isGranted(context, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)) {
-                Log.d(logTag, "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is not granted")
-                return
+                Log.w(logTag, "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is not granted, starting anyway")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
                 !XXPermissions.isGranted(context, SYSTEM_ALERT_WINDOW)) {
@@ -44,6 +59,7 @@ class BootReceiver : BroadcastReceiver() {
                 action = ACT_INIT_MEDIA_PROJECTION_AND_SERVICE
                 putExtra(EXT_INIT_FROM_BOOT, true)
             }
+            started = true
             Toast.makeText(context, "Adoluna Support is Open", Toast.LENGTH_LONG).show()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(it)
