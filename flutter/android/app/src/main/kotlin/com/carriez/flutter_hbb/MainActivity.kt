@@ -12,6 +12,7 @@ import ffi.FFI
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.ClipboardManager
@@ -217,6 +218,15 @@ class MainActivity : FlutterActivity() {
                 }
             }
             return
+        }
+        if (requestCode == REQ_INVOKE_PERMISSION_ACTIVITY_MEDIA_PROJECTION) {
+            // Adoluna: some devices (Sunmi K2_MINI) leave our UI drawn 180deg rotated after the
+            // projection dialog; re-apply orientation and force a relayout once we're back.
+            window.decorView.postDelayed({
+                requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+                window.decorView.requestLayout()
+                window.decorView.invalidate()
+            }, 300)
         }
         if (requestCode == REQ_INVOKE_PERMISSION_ACTIVITY_MEDIA_PROJECTION && resultCode == RES_FAILED) {
             flutterMethodChannel?.invokeMethod("on_media_projection_canceled", null)

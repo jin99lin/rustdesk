@@ -2308,7 +2308,11 @@ pub fn create_symmetric_key_msg(their_pk_b: [u8; 32]) -> (Bytes, Bytes, secretbo
 
 #[inline]
 pub fn using_public_server() -> bool {
+    // Adoluna: our own server is built in (RENDEZVOUS_SERVERS), so never treat it as public.
     crate::get_custom_rendezvous_server(get_option("custom-rendezvous-server")).is_empty()
+        && hbb_common::config::RENDEZVOUS_SERVERS
+            .iter()
+            .any(|s| s.ends_with("rustdesk.com"))
 }
 
 pub struct ThrottledInterval {

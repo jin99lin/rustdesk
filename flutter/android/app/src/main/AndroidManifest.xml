@@ -66,6 +66,7 @@
             android:exported="true"
             android:hardwareAccelerated="true"
             android:launchMode="singleTop"
+            android:screenOrientation="fullUser"
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
@@ -86,6 +87,7 @@
         <activity
             android:name=".PermissionRequestTransparentActivity"
             android:excludeFromRecents="true"
+            android:screenOrientation="behind"
             android:theme="@style/Transparent" />
 
         <service

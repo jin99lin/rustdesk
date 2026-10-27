@@ -27,8 +27,16 @@ class BootReceiver : BroadcastReceiver() {
                 return
             }
             // check pre-permission
-            if (!XXPermissions.isGranted(context, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, SYSTEM_ALERT_WINDOW)){
-                Log.d(logTag, "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS or SYSTEM_ALERT_WINDOW is not granted")
+            // Adoluna: overlay (SYSTEM_ALERT_WINDOW) is only needed on Android 10+ to launch the
+            // screen-capture consent activity from background. Below Android 10 (e.g. Sunmi K2_MINI)
+            // background activity starts are allowed, so don't require it (floating window is off).
+            if (!XXPermissions.isGranted(context, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)) {
+                Log.d(logTag, "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is not granted")
+                return
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                !XXPermissions.isGranted(context, SYSTEM_ALERT_WINDOW)) {
+                Log.d(logTag, "SYSTEM_ALERT_WINDOW is not granted (required on Android 10+)")
                 return
             }
 
