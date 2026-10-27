@@ -189,6 +189,43 @@ class _ServerPageState extends State<ServerPage> {
       await gFFI.serverModel.fetchID();
     });
     gFFI.serverModel.checkAndroidPermission();
+    // Adoluna: guided first-run setup so installers only tap "Allow".
+    if (isAndroid && !_adolunaGuideRan) {
+      _adolunaGuideRan = true;
+      Future.delayed(const Duration(milliseconds: 1500), _adolunaGuidedSetup);
+    }
+  }
+
+  static bool _adolunaGuideRan = false;
+
+  /// Sequentially: battery-optimization exemption -> start service (screen
+  /// capture consent) -> accessibility settings (input control).
+  /// Each step is skipped when already granted, so it is a no-op on a fully
+  /// set-up device (e.g. after start-on-boot).
+  Future<void> _adolunaGuidedSetup() async {
+    final sm = gFFI.serverModel;
+    try {
+      if (!await AndroidPermissionManager.check(
+          kRequestIgnoreBatteryOptimizations)) {
+        await AndroidPermissionManager.request(
+            kRequestIgnoreBatteryOptimizations);
+      }
+      if (!mounted) return;
+      if (!sm.isStart) {
+        await sm.checkRequestNotificationPermission();
+        await sm.startService(); // triggers the screen-capture consent dialog
+        // wait for the user to accept screen capture (up to 60s)
+        for (var i = 0; i < 60 && !sm.mediaOk; i++) {
+          await Future.delayed(const Duration(seconds: 1));
+        }
+      }
+      if (!mounted) return;
+      if (sm.isStart && !sm.inputOk) {
+        showInputWarnAlert(gFFI); // "Open System Setting" -> Accessibility
+      }
+    } catch (e) {
+      debugPrint("adoluna guided setup error: $e");
+    }
   }
 
   @override
