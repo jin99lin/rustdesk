@@ -36,7 +36,7 @@ class SettingsPage extends StatefulWidget implements PageShape {
   State<SettingsPage> createState() => _SettingsState();
 }
 
-const url = 'https://rustdesk.com/';
+const url = 'https://adoluna.com';
 
 enum KeepScreenOn {
   never,
@@ -173,16 +173,10 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         update = true;
       }
 
-      // start on boot depends on ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS and SYSTEM_ALERT_WINDOW
+      // Adoluna: keep start-on-boot preference; never write it false just because
+      // permissions are temporarily missing (that was clearing the default ON).
       var enableStartOnBoot =
           await gFFI.invokeMethod(AndroidChannel.kGetStartOnBootOpt);
-      if (enableStartOnBoot) {
-        if (!await canStartOnBoot()) {
-          enableStartOnBoot = false;
-          gFFI.invokeMethod(AndroidChannel.kSetStartOnBootOpt, false);
-        }
-      }
-
       if (enableStartOnBoot != _enableStartOnBoot) {
         update = true;
         _enableStartOnBoot = enableStartOnBoot;
@@ -273,15 +267,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   }
 
   Future<bool> checkAndUpdateStartOnBoot() async {
-    if (!await canStartOnBoot() && _enableStartOnBoot) {
-      _enableStartOnBoot = false;
-      debugPrint(
-          "checkAndUpdateStartOnBoot and set _enableStartOnBoot -> false");
-      gFFI.invokeMethod(AndroidChannel.kSetStartOnBootOpt, false);
-      return true;
-    } else {
-      return false;
-    }
+    // Adoluna: do not flip the preference off when overlay/battery perms are
+    // missing; BootReceiver decides what it can start with.
+    return false;
   }
 
   @override
@@ -615,8 +603,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               }
             }
 
-            // 2. request kSystemAlertWindow
-            if (!await AndroidPermissionManager.check(kSystemAlertWindow)) {
+            // 2. request kSystemAlertWindow (Android 10+ only)
+            if (androidVersion >= 29 &&
+                !await AndroidPermissionManager.check(kSystemAlertWindow)) {
               if (!await AndroidPermissionManager.request(kSystemAlertWindow)) {
                 return;
               }
@@ -1030,12 +1019,23 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 title: Text(translate("Version: ") + version),
                 value: Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text('rustdesk.com',
+                  child: Text('adoluna.com',
                       style: TextStyle(
                         decoration: TextDecoration.underline,
                       )),
                 ),
                 leading: Icon(Icons.info)),
+            SettingsTile(
+                title: Text('Based on RustDesk (AGPL-3.0)'),
+                value: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text('Source: github.com/jin99lin/rustdesk',
+                      style: TextStyle(fontSize: 12)),
+                ),
+                onPressed: (context) async {
+                  await launchUrl(Uri.parse('https://github.com/jin99lin/rustdesk'));
+                },
+                leading: Icon(Icons.code)),
             SettingsTile(
                 title: Text(translate("Build Date")),
                 value: Padding(
@@ -1060,12 +1060,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                   child: Text(_myId),
                 ),
                 leading: Icon(Icons.perm_identity)),
-            SettingsTile(
-              title: Text(translate("Privacy Statement")),
-              onPressed: (context) =>
-                  launchUrlString('https://rustdesk.com/privacy.html'),
-              leading: Icon(Icons.privacy_tip),
-            )
           ],
         ),
       ],
@@ -1074,11 +1068,12 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   }
 
   Future<bool> canStartOnBoot() async {
-    // start on boot depends on ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS and SYSTEM_ALERT_WINDOW
+    // Adoluna: overlay only required on Android 10+ (background activity start).
     if (_hasIgnoreBattery && !_ignoreBatteryOpt) {
       return false;
     }
-    if (!await AndroidPermissionManager.check(kSystemAlertWindow)) {
+    if (androidVersion >= 29 &&
+        !await AndroidPermissionManager.check(kSystemAlertWindow)) {
       return false;
     }
     return true;
@@ -1176,12 +1171,12 @@ void showAbout(OverlayDialogManager dialogManager) {
         Text('Version: $version'),
         InkWell(
             onTap: () async {
-              const url = 'https://rustdesk.com/';
+              const url = 'https://adoluna.com';
               await launchUrl(Uri.parse(url));
             },
             child: Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('rustdesk.com',
+              child: Text('adoluna.com · Based on RustDesk (AGPL-3.0)',
                   style: TextStyle(
                     decoration: TextDecoration.underline,
                   )),

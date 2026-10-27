@@ -235,6 +235,14 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Adoluna: seed start-on-boot = true once so Settings can't leave it unset/off by default.
+        val prefs = getSharedPreferences(KEY_SHARED_PREFERENCES, MODE_PRIVATE)
+        if (!prefs.contains("KEY_START_ON_BOOT_OPT_SEEDED")) {
+            prefs.edit()
+                .putBoolean(KEY_START_ON_BOOT_OPT, true)
+                .putBoolean("KEY_START_ON_BOOT_OPT_SEEDED", true)
+                .apply()
+        }
         if (_rdClipboardManager == null) {
             _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
             FFI.setClipboardManager(_rdClipboardManager!!)

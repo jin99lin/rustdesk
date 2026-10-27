@@ -2554,20 +2554,15 @@ class _AboutState extends State<_About> {
                       .marginSymmetric(vertical: 4.0)),
               InkWell(
                   onTap: () {
-                    launchUrlString('https://rustdesk.com/privacy.html');
+                    launchUrlString('https://adoluna.com');
                   },
                   child: Text(
-                    translate('Privacy Statement'),
+                    'adoluna.com',
                     style: linkStyle,
                   ).marginSymmetric(vertical: 4.0)),
-              InkWell(
-                  onTap: () {
-                    launchUrlString('https://rustdesk.com');
-                  },
-                  child: Text(
-                    translate('Website'),
-                    style: linkStyle,
-                  ).marginSymmetric(vertical: 4.0)),
+              SelectionArea(
+                  child: Text('Based on RustDesk (AGPL-3.0). Source: https://github.com/jin99lin/rustdesk')
+                      .marginSymmetric(vertical: 4.0)),
               Container(
                 decoration: const BoxDecoration(color: Color(0xFF2c8cff)),
                 padding:
