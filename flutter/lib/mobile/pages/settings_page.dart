@@ -36,7 +36,7 @@ class SettingsPage extends StatefulWidget implements PageShape {
   State<SettingsPage> createState() => _SettingsState();
 }
 
-const url = 'https://adoluna.com';
+const url = 'https://adolunapos.com';
 
 enum KeepScreenOn {
   never,
@@ -1019,7 +1019,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 title: Text(translate("Version: ") + version),
                 value: Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text('adoluna.com',
+                  child: Text('adolunapos.com',
                       style: TextStyle(
                         decoration: TextDecoration.underline,
                       )),
@@ -1171,12 +1171,12 @@ void showAbout(OverlayDialogManager dialogManager) {
         Text('Version: $version'),
         InkWell(
             onTap: () async {
-              const url = 'https://adoluna.com';
+              const url = 'https://adolunapos.com';
               await launchUrl(Uri.parse(url));
             },
             child: Padding(
               padding: EdgeInsets.symmetric(vertical: 8),
-              child: Text('adoluna.com · Based on RustDesk (AGPL-3.0)',
+              child: Text('adolunapos.com · Based on RustDesk (AGPL-3.0)',
                   style: TextStyle(
                     decoration: TextDecoration.underline,
                   )),

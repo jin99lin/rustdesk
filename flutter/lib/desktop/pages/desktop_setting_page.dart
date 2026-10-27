@@ -2554,10 +2554,10 @@ class _AboutState extends State<_About> {
                       .marginSymmetric(vertical: 4.0)),
               InkWell(
                   onTap: () {
-                    launchUrlString('https://adoluna.com');
+                    launchUrlString('https://adolunapos.com');
                   },
                   child: Text(
-                    'adoluna.com',
+                    'adolunapos.com',
                     style: linkStyle,
                   ).marginSymmetric(vertical: 4.0)),
               SelectionArea(
