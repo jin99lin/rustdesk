@@ -4,6 +4,7 @@ import 'package:flutter_hbb/mobile/pages/settings_page.dart';
 import 'package:flutter_hbb/web/settings_page.dart';
 import 'package:get/get.dart';
 import '../../common.dart';
+import '../../consts.dart';
 import '../../common/widgets/chat_page.dart';
 import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
@@ -43,6 +44,30 @@ class HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     initPages();
+    // Adoluna: on launch, if setup is incomplete, jump to "Share screen" so the
+    // guided permission setup (ServerPage) starts by itself. Once per launch.
+    if (isAndroid && !bind.isOutgoingOnly() && !_adolunaAutoJumped) {
+      _adolunaAutoJumped = true;
+      Future.delayed(const Duration(milliseconds: 500), _adolunaMaybeOpenShare);
+    }
+  }
+
+  static bool _adolunaAutoJumped = false;
+
+  Future<void> _adolunaMaybeOpenShare() async {
+    try {
+      final sm = gFFI.serverModel;
+      await sm.checkAndroidPermission();
+      final battery = await AndroidPermissionManager.check(
+          kRequestIgnoreBatteryOptimizations);
+      if (battery && sm.isStart && sm.mediaOk && sm.inputOk) return;
+      final idx = _pages.indexWhere((p) => p is ServerPage);
+      if (idx >= 0 && mounted && _selectedIndex != idx) {
+        setState(() => _selectedIndex = idx);
+      }
+    } catch (e) {
+      debugPrint("adoluna auto-open share page error: $e");
+    }
   }
 
   void initPages() {
