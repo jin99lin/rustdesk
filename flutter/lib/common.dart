@@ -3020,8 +3020,15 @@ int versionCmp(String v1, String v2) {
   return bind.versionToNumber(v: v1) - bind.versionToNumber(v: v2);
 }
 
+/// Adoluna: user-visible product name (with a space); the internal app name
+/// "AdolunaSupport" (config dirs, service, exe) is kept unchanged.
+String get appDisplayName {
+  final n = bind.mainGetAppNameSync();
+  return n == 'AdolunaSupport' ? 'Adoluna Support' : n;
+}
+
 String getWindowName({WindowType? overrideType}) {
-  final name = bind.mainGetAppNameSync();
+  final name = appDisplayName;
   switch (overrideType ?? kWindowType) {
     case WindowType.Main:
       return name;

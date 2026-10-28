@@ -1083,6 +1083,19 @@ pub fn get_app_name() -> String {
     hbb_common::config::APP_NAME.read().unwrap().clone()
 }
 
+/// Adoluna: user-visible product name (with a space). The internal APP_NAME
+/// ("AdolunaSupport") is kept unchanged because it drives config dirs, service
+/// names, exe/bundle paths and launchd plists; only display strings use this.
+#[inline]
+pub fn get_app_display_name() -> String {
+    let n = get_app_name();
+    if n == "AdolunaSupport" {
+        "Adoluna Support".to_owned()
+    } else {
+        n
+    }
+}
+
 #[inline]
 pub fn is_rustdesk() -> bool {
     hbb_common::config::APP_NAME.read().unwrap().eq("RustDesk")

@@ -87,7 +87,10 @@ pub(super) fn is_matching_entry(
     }
 
     match entry.get_value::<String, _>(REG_NAME_DISPLAY_NAME) {
-        Ok(display_name) => Ok(display_name.eq_ignore_ascii_case(app_name)),
+        Ok(display_name) => Ok(display_name.eq_ignore_ascii_case(app_name)
+            // Adoluna: MSI ProductName is the spaced display name.
+            || (app_name.eq_ignore_ascii_case("AdolunaSupport")
+                && display_name.eq_ignore_ascii_case("Adoluna Support"))),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => bail!(
             "Failed to read {REG_NAME_DISPLAY_NAME} from MSI uninstall entry {key_name}: {err}"

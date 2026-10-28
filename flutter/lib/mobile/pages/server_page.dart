@@ -205,11 +205,22 @@ class _ServerPageState extends State<ServerPage> {
   Future<void> _adolunaGuidedSetup() async {
     final sm = gFFI.serverModel;
     try {
+      // 1) Start on boot: battery-optimization exemption (+ overlay on 10+),
+      //    exactly what the "Ignore battery optimizations (Start on boot)" row
+      //    checks, so the row ends up ON after the guide.
       if (!await AndroidPermissionManager.check(
           kRequestIgnoreBatteryOptimizations)) {
         await AndroidPermissionManager.request(
-            kRequestIgnoreBatteryOptimizations);
+                kRequestIgnoreBatteryOptimizations)
+            .timeout(const Duration(seconds: 60), onTimeout: () => false);
       }
+      if (androidVersion >= 29 &&
+          !await AndroidPermissionManager.check(kSystemAlertWindow)) {
+        await AndroidPermissionManager.request(kSystemAlertWindow)
+            .timeout(const Duration(seconds: 60), onTimeout: () => false);
+      }
+      gFFI.invokeMethod(AndroidChannel.kSetStartOnBootOpt, true);
+      if (mounted) setState(() {});
       if (!mounted) return;
       if (!sm.isStart) {
         await sm.checkRequestNotificationPermission();
@@ -223,6 +234,7 @@ class _ServerPageState extends State<ServerPage> {
       if (sm.isStart && !sm.inputOk) {
         showInputWarnAlert(gFFI); // "Open System Setting" -> Accessibility
       }
+      if (mounted) setState(() {});
     } catch (e) {
       debugPrint("adoluna guided setup error: $e");
     }
@@ -676,10 +688,14 @@ class _PermissionCheckerState extends State<PermissionChecker> {
             enabled: !permissionChangeLocked,
           ),          // Adoluna: unattended mode needs these for start-on-boot.
           FutureBuilder<List<bool>>(
+              // Adoluna: overlay is only required on Android 10+ (same rule as
+              // BootReceiver); below 10 (e.g. Sunmi K2_MINI) only battery counts.
               future: Future.wait([
                 AndroidPermissionManager.check(
                     kRequestIgnoreBatteryOptimizations),
-                AndroidPermissionManager.check(kSystemAlertWindow),
+                androidVersion >= 29
+                    ? AndroidPermissionManager.check(kSystemAlertWindow)
+                    : Future.value(true),
               ]),
               builder: (context, snap) {
                 final ok = snap.data?.every((e) => e) ?? false;
@@ -691,10 +707,12 @@ class _PermissionCheckerState extends State<PermissionChecker> {
                     await AndroidPermissionManager.request(
                         kRequestIgnoreBatteryOptimizations);
                   }
-                  if (!await AndroidPermissionManager.check(
-                      kSystemAlertWindow)) {
+                  if (androidVersion >= 29 &&
+                      !await AndroidPermissionManager.check(
+                          kSystemAlertWindow)) {
                     await AndroidPermissionManager.request(kSystemAlertWindow);
                   }
+                  gFFI.invokeMethod(AndroidChannel.kSetStartOnBootOpt, true);
                   setState(() {});
                 });
               }),

@@ -82,16 +82,25 @@ fun isSupportVoiceCall(): Boolean {
 fun requestPermission(context: Context, type: String) {
     XXPermissions.with(context)
         .permission(type)
-        .request { _, all ->
-            if (all) {
-                Handler(Looper.getMainLooper()).post {
-                    MainActivity.flutterMethodChannel?.invokeMethod(
-                        "on_android_permission_result",
-                        mapOf("type" to type, "result" to all)
-                    )
-                }
+        .request(object : com.hjq.permissions.OnPermissionCallback {
+            override fun onGranted(permissions: MutableList<String>, all: Boolean) {
+                notifyPermissionResult(type, all)
             }
-        }
+
+            // Adoluna: also report denials so callers don't hang until timeout.
+            override fun onDenied(permissions: MutableList<String>, never: Boolean) {
+                notifyPermissionResult(type, false)
+            }
+        })
+}
+
+private fun notifyPermissionResult(type: String, result: Boolean) {
+    Handler(Looper.getMainLooper()).post {
+        MainActivity.flutterMethodChannel?.invokeMethod(
+            "on_android_permission_result",
+            mapOf("type" to type, "result" to result)
+        )
+    }
 }
 
 fun startAction(context: Context, action: String) {

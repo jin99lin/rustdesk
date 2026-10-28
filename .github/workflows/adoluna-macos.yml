@@ -159,6 +159,12 @@ jobs:
           done
           cd ..
           lipo -info "${APP}/Contents/MacOS/AdolunaSupport" "${APP}/Contents/Frameworks/liblibrustdesk.dylib" || true
+          # Adoluna: Finder/Dock/Launchpad show "Adoluna Support" while the bundle path stays AdolunaSupport.app
+          for l in en zh-Hans zh_CN Base; do
+            mkdir -p "${APP}/Contents/Resources/${l}.lproj"
+            printf '"CFBundleDisplayName" = "Adoluna Support";\n"CFBundleName" = "Adoluna Support";\n' > "${APP}/Contents/Resources/${l}.lproj/InfoPlist.strings"
+          done
+          /usr/libexec/PlistBuddy -c "Print :CFBundleName" -c "Print :CFBundleDisplayName" -c "Print :LSHasLocalizedDisplayName" "${APP}/Contents/Info.plist" || true
       - name: Ad-hoc re-sign (unsigned build, fixes FlutterMacOS Team ID mismatch)
         if: env.MACOS_P12_BASE64 == ''
         run: |

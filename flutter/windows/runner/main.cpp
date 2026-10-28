@@ -90,6 +90,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   // Uri links dispatch
+  // Adoluna: visible window title uses the spaced product name; the internal
+  // app name (exe/service/config) stays "AdolunaSupport".
+  if (app_name == L"AdolunaSupport") {
+    app_name = L"Adoluna Support";
+  }
   HWND hwnd = ::FindWindowW(getWindowClassName(), app_name.c_str());
   if (hwnd != NULL) {
     // Allow multiple flutter instances when being executed by parameters

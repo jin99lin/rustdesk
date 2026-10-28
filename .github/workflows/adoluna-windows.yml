@@ -142,6 +142,18 @@ jobs:
           if (!(Test-Path ./rustdesk/AdolunaSupport.exe)) { mv ./rustdesk/rustdesk.exe ./rustdesk/AdolunaSupport.exe }
           pushd ./res/msi
           python preprocess.py --arp -d ../../rustdesk --app-name AdolunaSupport --manufacturer Adoluna -v ${{ env.VERSION }}
+          # Adoluna: visible names (Programs & Features, Start menu/desktop shortcuts) use "Adoluna Support";
+          # exe, install dir, service name and UpgradeCode stay "AdolunaSupport".
+          $wxl = './Package/Language/Package.en-us.wxl'
+          $c = Get-Content $wxl -Raw -Encoding UTF8
+          foreach ($id in 'SC_Uninstall','SC_Uninstall_Desc','SC_Client','SC_Client_Desc','Service_DisplayName') {
+            $c = [regex]::Replace($c, '(<String Id="' + $id + '" Value="[^"]*)', { param($m) $m.Value -replace 'AdolunaSupport','Adoluna Support' })
+          }
+          Set-Content $wxl $c -Encoding UTF8 -NoNewline
+          $pk = './Package/Package.wxs'
+          (Get-Content $pk -Raw -Encoding UTF8).Replace('<Package Name="$(var.Product)"','<Package Name="Adoluna Support"') | Set-Content $pk -Encoding UTF8 -NoNewline
+          Select-String -Path $wxl -Pattern 'SC_Client"|SC_Uninstall"|Service_DisplayName'
+          Select-String -Path $pk -Pattern '<Package Name'
           nuget restore msi.sln
           msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
           $msi = Get-ChildItem -Recurse ./Package/bin -Filter *.msi | Select-Object -First 1
