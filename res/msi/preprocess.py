@@ -93,7 +93,7 @@ def make_parser():
         "-m",
         "--manufacturer",
         type=str,
-        default="Purslane Tech Pte. Ltd.",
+        default="Adoluna Corporation",
         help="The app manufacturer.",
     )
     return parser
@@ -529,6 +529,8 @@ def replace_component_guids_in_wxs():
 if __name__ == "__main__":
     parser = make_parser()
     args = parser.parse_args()
+    if args.manufacturer in ("Adoluna", "Purslane"):
+        args.manufacturer = "Adoluna Corporation"
 
     app_name = args.app_name
     dist_dir = Path(sys.argv[0]).parent.joinpath(args.dist_dir).resolve()
