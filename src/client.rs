@@ -2855,6 +2855,7 @@ pub struct LoginConfigHandler {
     pub is_terminal_admin: bool,
     hash: Hash,
     password: Vec<u8>, // remember password for reconnect
+    pub adoluna_ticket: String, // one-shot, consumed by create_login_msg
     pub remember: bool,
     config: PeerConfig,
     pub port_forward: (String, i32),
@@ -3874,6 +3875,7 @@ impl LoginConfigHandler {
             Default::default()
         };
         let mut lr = LoginRequest {
+            adoluna_ticket: self.adoluna_ticket.clone(),
             username: pure_id,
             password: password.into(),
             my_id,
@@ -4745,7 +4747,18 @@ pub async fn handle_hash(
         return true;
     }
 
-    let password = if password.is_empty() {
+    // Adoluna: ask the API server for a one-time account ticket (falls back to password).
+    let adoluna_ticket = if lc.read().unwrap().other_server.is_none() {
+        let peer_id = lc.read().unwrap().id.clone();
+        crate::adoluna_auth::fetch_ticket(&peer_id, &Config::get_id(), &hash.challenge).await
+    } else {
+        String::new()
+    };
+    let has_ticket = !adoluna_ticket.is_empty();
+    lc.write().unwrap().adoluna_ticket = adoluna_ticket;
+    let password = if password.is_empty() && has_ticket {
+        Vec::new()
+    } else if password.is_empty() {
         // login without password, the remote side can click accept
         interface.msgbox("input-password", "Password Required", "", "");
         Vec::new()
@@ -4806,6 +4819,7 @@ async fn send_login(
         .read()
         .unwrap()
         .create_login_msg(os_username, os_password, password);
+    lc.write().unwrap().adoluna_ticket.clear();
     allow_err!(peer.send(&msg_out).await);
 }
 

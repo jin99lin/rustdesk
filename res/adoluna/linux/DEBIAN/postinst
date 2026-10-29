@@ -2,6 +2,7 @@
 set -e
 if [ "$1" = configure ]; then
 	ln -f -s /usr/share/adoluna-support/adolunasupport /usr/bin/adolunasupport
+	update-desktop-database -q /usr/share/applications 2>/dev/null || true
 	if [ "$(basename "$(readlink /proc/1/exe)")" = systemd ]; then
 		mkdir -p /usr/lib/systemd/system/
 		cp /usr/share/adoluna-support/files/systemd/adolunasupport.service /usr/lib/systemd/system/adolunasupport.service
