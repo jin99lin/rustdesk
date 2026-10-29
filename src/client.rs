@@ -458,7 +458,11 @@ impl Client {
         let (peer, other_server, key, token) = if let Some((a, b, c)) = other_server.as_ref() {
             (a.as_ref(), b.as_ref(), c.as_ref(), "")
         } else {
-            (peer, "", key, token)
+            // Adoluna: our OSS hbbs ignores the account token and never starts a key exchange,
+            // so sending it makes a logged-in controller wait for a handshake that never comes
+            // ("Failed to secure tcp") and would expose the token to the rendezvous server.
+            let _ = token;
+            (peer, "", key, "")
         };
         let (rendezvous_server, servers, contained) = if other_server.is_empty() {
             crate::get_rendezvous_server(1_000).await
