@@ -1,5 +1,5 @@
 # Adoluna Support - macOS universal (arm64 + x86_64) dmg. Derived from RustDesk 1.5.0 flutter-build.yml.
-# Manual trigger only, no release upload. Signing + notarization run only when MACOS_P12_BASE64 is set.
+# Manual trigger only, no release upload. Developer ID signed + notarized (required).
 # Secrets: MACOS_P12_BASE64, MACOS_P12_PASSWORD, APPLE_ID, APPLE_APP_PASSWORD, APPLE_TEAM_ID
 name: adoluna-macos
 
@@ -17,9 +17,18 @@ env:
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   APP: "AdolunaSupport.app"
-  MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
 
 jobs:
+  notary-check:
+    runs-on: macos-15
+    steps:
+      - name: Verify notarytool credentials before the long build
+        env:
+          AID: ${{ secrets.APPLE_ID }}
+          APW: ${{ secrets.APPLE_APP_PASSWORD }}
+          TID: ${{ secrets.APPLE_TEAM_ID }}
+        run: xcrun notarytool history --apple-id "$AID" --password "$APW" --team-id "$TID" | head -20
+
   bridge:
     runs-on: ubuntu-22.04
     steps:
@@ -55,7 +64,7 @@ jobs:
             ./flutter/macos/Runner/bridge_generated.h
 
   build:
-    needs: bridge
+    needs: [bridge, notary-check]
     strategy:
       fail-fast: true
       matrix:
@@ -165,47 +174,84 @@ jobs:
             printf '"CFBundleDisplayName" = "Adoluna Support";\n"CFBundleName" = "Adoluna Support";\n' > "${APP}/Contents/Resources/${l}.lproj/InfoPlist.strings"
           done
           /usr/libexec/PlistBuddy -c "Print :CFBundleName" -c "Print :CFBundleDisplayName" -c "Print :LSHasLocalizedDisplayName" "${APP}/Contents/Info.plist" || true
-      - name: Ad-hoc re-sign (unsigned build, fixes FlutterMacOS Team ID mismatch)
-        if: env.MACOS_P12_BASE64 == ''
+      - name: Import Developer ID certificate (temp keychain)
+        env:
+          P12: ${{ secrets.MACOS_P12_BASE64 }}
+          P12_PW: ${{ secrets.MACOS_P12_PASSWORD }}
+        run: |
+          test -n "$P12" || { echo "MACOS_P12_BASE64 secret missing"; exit 1; }
+          KC="$RUNNER_TEMP/adoluna.keychain-db"; KPW=$(openssl rand -hex 24)
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PW" -A -t cert -f pkcs12 -k "$KC"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          IDENTITY=$(security find-identity -v -p codesigning "$KC" | grep -m1 "Developer ID Application" | sed -E 's/.*"(.*)"/\1/')
+          test -n "$IDENTITY" || { echo "No Developer ID Application identity"; exit 1; }
+          echo "Signing with: $IDENTITY"
+          echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+      - name: Check notarytool credentials
+        env:
+          AID: ${{ secrets.APPLE_ID }}
+          APW: ${{ secrets.APPLE_APP_PASSWORD }}
+          TID: ${{ secrets.APPLE_TEAM_ID }}
+        run: xcrun notarytool history --apple-id "$AID" --password "$APW" --team-id "$TID" | head -20
+      - name: Codesign app (inside-out, hardened runtime)
         run: |
           xattr -cr "${APP}"
-          codesign --remove-signature "${APP}" || true
-          find "${APP}/Contents/Frameworks" -depth \( -name "*.framework" -o -name "*.dylib" \) -exec codesign --force --sign - {} \;
-          codesign --force --deep --sign - "${APP}"
-          codesign -v --deep --strict --verbose=2 "${APP}"
-          codesign -dv "${APP}" 2>&1 | grep -E "Signature|TeamIdentifier"
-      - name: Import signing certificate
-        if: env.MACOS_P12_BASE64 != ''
-        uses: apple-actions/import-codesign-certs@253ddeeac23f2bdad1646faac5c8c2832e800071 # v1
-        with:
-          p12-file-base64: ${{ secrets.MACOS_P12_BASE64 }}
-          p12-password: ${{ secrets.MACOS_P12_PASSWORD }}
-          keychain: adoluna
-      - name: Codesign app
-        if: env.MACOS_P12_BASE64 != ''
-        run: |
-          security default-keychain -s adoluna.keychain
-          security unlock-keychain -p "${{ secrets.MACOS_P12_PASSWORD }}" adoluna.keychain
-          IDENTITY=$(security find-identity -v -p codesigning adoluna.keychain | grep -m1 "Developer ID Application" | sed -E 's/.*"(.*)"/\1/')
-          echo "Signing with: $IDENTITY"
+          # any extra Mach-O under MacOS/ or Resources/ (helpers) first
+          find "${APP}/Contents/MacOS" "${APP}/Contents/Resources" -type f ! -path "*/Contents/MacOS/AdolunaSupport" -print0 | while IFS= read -r -d '' f; do
+            if file -b "$f" | grep -q 'Mach-O'; then codesign --force --options runtime --timestamp --sign "$IDENTITY" "$f"; fi
+          done
           bash ./.github/scripts/sign-macos-app.sh "${APP}" "$IDENTITY" ./flutter/macos/Runner/Release.entitlements
-          echo "IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          codesign -dv --verbose=2 "${APP}" 2>&1 | grep -E "Authority|TeamIdentifier|flags|Timestamp"
+      - name: Notarize and staple app
+        env:
+          AID: ${{ secrets.APPLE_ID }}
+          APW: ${{ secrets.APPLE_APP_PASSWORD }}
+          TID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent "${APP}" app-notarize.zip
+          xcrun notarytool submit app-notarize.zip --apple-id "$AID" --password "$APW" --team-id "$TID" --wait --timeout 60m --output-format json | tee notary-app.json
+          grep -Eq '"status" *: *"Accepted"' notary-app.json || { ID=$(sed -E 's/.*"id":"([^"]*)".*/\1/' notary-app.json); xcrun notarytool log "$ID" --apple-id "$AID" --password "$APW" --team-id "$TID"; exit 1; }
+          xcrun stapler staple "${APP}"
+          xcrun stapler validate "${APP}"
+          spctl -a -vvv -t exec "${APP}" 2>&1 | tee spctl-app.txt
       - name: Create dmg
         run: |
           brew install create-dmg
           CREATE_DMG="$(readlink -f "$(command -v create-dmg)")"
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
-          SUFFIX=$([ -n "$MACOS_P12_BASE64" ] && echo "" || echo "-unsigned")
-          DMG="adoluna-support-${VERSION}-universal${SUFFIX}.dmg"
+          DMG="adoluna-support-${VERSION}-universal.dmg"
           create-dmg --volname "Adoluna Support" --icon "${APP}" 200 190 --hide-extension "${APP}" --window-size 800 400 --app-drop-link 600 185 "$DMG" "${APP}"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
       - name: Sign, notarize and staple dmg
-        if: env.MACOS_P12_BASE64 != ''
+        env:
+          AID: ${{ secrets.APPLE_ID }}
+          APW: ${{ secrets.APPLE_APP_PASSWORD }}
+          TID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          codesign --force --timestamp --options runtime -s "$IDENTITY" "$DMG" -vvv
-          xcrun notarytool submit "$DMG" --apple-id "${{ secrets.APPLE_ID }}" --password "${{ secrets.APPLE_APP_PASSWORD }}" --team-id "${{ secrets.APPLE_TEAM_ID }}" --wait
+          codesign --force --timestamp -s "$IDENTITY" "$DMG" -vvv
+          xcrun notarytool submit "$DMG" --apple-id "$AID" --password "$APW" --team-id "$TID" --wait --timeout 60m --output-format json | tee notary-dmg.json
+          grep -Eq '"status" *: *"Accepted"' notary-dmg.json || exit 1
           xcrun stapler staple "$DMG"
-          spctl -a -t open --context context:primary-signature -vv "$DMG"
+          xcrun stapler validate "$DMG" 2>&1 | tee stapler-dmg.txt
+          spctl -a -vvv -t open --context context:primary-signature "$DMG" 2>&1 | tee spctl-dmg.txt
+          shasum -a 256 "$DMG" | tee -a spctl-dmg.txt
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/adoluna.keychain-db" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: signing-report
+          path: |
+            notary-*.json
+            spctl-*.txt
+            stapler-*.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: adoluna-support-macos-universal
