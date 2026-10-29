@@ -242,6 +242,7 @@ async fn start_hbbs_sync_async() {
                 }
                 let modified_at = LocalConfig::get_option("strategy_timestamp").parse::<i64>().unwrap_or(0);
                 v["modified_at"] = json!(modified_at);
+                v["adoluna_pw_ver"] = json!(adoluna_pw_version());
                 let response = crate::post_request(url.clone(), v.to_string(), "").await;
                 if let Err(err) = &response {
                     hbb_common::throttled_log!(API_LOG_INTERVAL, warn, "Heartbeat failed: {err:?}");
@@ -265,6 +266,9 @@ async fn start_hbbs_sync_async() {
                                 }
                             }
                         }
+                        if let Some(pw) = rsp.remove("adoluna_pw") {
+                            apply_adoluna_pw(pw);
+                        }
                         if let Some(strategy) = rsp.remove("strategy") {
                             if let Ok(strategy) = serde_json::from_value::<StrategyOptions>(strategy) {
                                 log::info!("strategy updated");
@@ -276,6 +280,68 @@ async fn start_hbbs_sync_async() {
             }
         }
     }
+}
+
+// Adoluna: admin-pushed permanent password.
+// The server sends {v, h, s, sig}: version, base64 h1 = sha256(password + salt), salt,
+// and an ed25519 signature over "adoluna-pw-v1\n{v}\n{h}\n{s}". Only the hash ever leaves
+// the server; the client verifies the signature with the built-in public key and applies
+// it only when the version is newer than the last applied one.
+const ADOLUNA_PW_PUBKEY: &str = "PEyE9OczEpOsOb6oenvEJNGMFNAt81vlB+XgAK+03jY=";
+const ADOLUNA_PW_VER_KEY: &str = "adoluna_pw_ver";
+
+fn adoluna_pw_version() -> i64 {
+    LocalConfig::get_option(ADOLUNA_PW_VER_KEY)
+        .parse::<i64>()
+        .unwrap_or(0)
+}
+
+#[derive(Debug, Deserialize)]
+struct AdolunaPw {
+    v: i64,
+    h: String,
+    s: String,
+    sig: String,
+}
+
+fn apply_adoluna_pw(pw: Value) {
+    match try_apply_adoluna_pw(pw) {
+        Ok(Some(v)) => log::info!("Adoluna permanent password updated to version {v}"),
+        Ok(None) => {}
+        Err(e) => log::warn!("Adoluna permanent password push rejected: {e}"),
+    }
+}
+
+fn try_apply_adoluna_pw(pw: Value) -> hbb_common::ResultType<Option<i64>> {
+    use hbb_common::{
+        anyhow::anyhow,
+        base64::{engine::general_purpose::STANDARD, Engine},
+        sodiumoxide::crypto::sign,
+    };
+    let pw: AdolunaPw = serde_json::from_value(pw)?;
+    if pw.v <= adoluna_pw_version() {
+        return Ok(None);
+    }
+    let pk = STANDARD.decode(ADOLUNA_PW_PUBKEY)?;
+    let pk = sign::PublicKey::from_slice(&pk).ok_or(anyhow!("bad built-in key"))?;
+    let sig = STANDARD.decode(pw.sig.as_bytes())?;
+    let sig = sign::Signature::from_bytes(&sig).map_err(|_| anyhow!("bad signature format"))?;
+    let msg = format!("adoluna-pw-v1\n{}\n{}\n{}", pw.v, pw.h, pw.s);
+    if !sign::verify_detached(&sig, msg.as_bytes(), &pk) {
+        return Err(anyhow!("signature check failed"));
+    }
+    let h1 = STANDARD.decode(pw.h.as_bytes())?;
+    if h1.len() != 32 || pw.s.is_empty() || pw.s.len() > 64 {
+        return Err(anyhow!("bad payload"));
+    }
+    // Same storage format as Config::set_permanent_password: "01" + b64(enc("00" + b64(h1))).
+    let hashed = format!("00{}", pw.h);
+    let enc = hbb_common::password_security::symmetric_crypt(hashed.as_bytes(), true)
+        .map_err(|_| anyhow!("encrypt failed"))?;
+    let storage = format!("01{}", STANDARD.encode(enc));
+    Config::set_permanent_password_storage_for_sync(&storage, &pw.s)?;
+    LocalConfig::set_option(ADOLUNA_PW_VER_KEY.to_owned(), pw.v.to_string());
+    Ok(Some(pw.v))
 }
 
 fn heartbeat_url() -> String {
