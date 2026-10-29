@@ -67,3 +67,5 @@
 #adp table{table-layout:auto}#adp td{vertical-align:middle}#adp td,#adp th{padding:8px 10px}#adp th{white-space:nowrap}#adp td:first-child,#adp td.ck+td,#adp td.mono{white-space:nowrap}
 #adp .ck{width:28px;padding-right:0}#adp .ck input{height:auto;width:auto}
 #adp .card{overflow-x:auto}
+#adp-acl .adp-ck{display:flex;gap:8px;align-items:center;margin:4px 0;cursor:pointer}.adp-gr{padding:3px 0}.adp-gr a,#adp-al{color:#C62828;margin-left:6px}
+.adp-at{width:100%;border-collapse:collapse;font-size:12px}.adp-at td,.adp-at th{border-bottom:1px solid #eee;padding:4px 6px;text-align:left}

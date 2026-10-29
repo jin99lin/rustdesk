@@ -243,6 +243,7 @@ async fn start_hbbs_sync_async() {
                 let modified_at = LocalConfig::get_option("strategy_timestamp").parse::<i64>().unwrap_or(0);
                 v["modified_at"] = json!(modified_at);
                 v["adoluna_pw_ver"] = json!(adoluna_pw_version());
+                v["adoluna_cfg_ts"] = json!(crate::adoluna_auth::cfg_ts());
                 let response = crate::post_request(url.clone(), v.to_string(), "").await;
                 if let Err(err) = &response {
                     hbb_common::throttled_log!(API_LOG_INTERVAL, warn, "Heartbeat failed: {err:?}");
@@ -268,6 +269,9 @@ async fn start_hbbs_sync_async() {
                         }
                         if let Some(pw) = rsp.remove("adoluna_pw") {
                             apply_adoluna_pw(pw);
+                        }
+                        if let Some(cfg) = rsp.remove("adoluna_cfg") {
+                            crate::adoluna_auth::apply_cfg(cfg);
                         }
                         if let Some(strategy) = rsp.remove("strategy") {
                             if let Ok(strategy) = serde_json::from_value::<StrategyOptions>(strategy) {

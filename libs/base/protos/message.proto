@@ -84,6 +84,8 @@ message LoginRequest {
   string my_platform = 13;
   bytes hwid = 14;
   string avatar = 17;
+  // Adoluna: one-time account ticket (JSON {u,e,sig}) signed by the API server.
+  string adoluna_ticket = 100;
 }
 
 message Terminal {

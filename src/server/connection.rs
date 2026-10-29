@@ -2860,6 +2860,13 @@ impl Connection {
         }
         // After handling CloseReason messages, proceed to process other message types
         if let Some(message::Union::LoginRequest(lr)) = msg.union {
+            // Adoluna: controller-only devices refuse every incoming login.
+            if crate::adoluna_auth::controller_only() {
+                self.send_login_error(crate::adoluna_auth::LOGIN_MSG_CONTROLLER_ONLY)
+                    .await;
+                sleep(1.).await;
+                return false;
+            }
             if !self.check_login_scope(&lr).await {
                 return false;
             }
@@ -2991,7 +2998,29 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
 
-            if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
+            // Adoluna: a valid server-signed account ticket replaces the password.
+            // Never applies in click-only mode; any failure falls through to the normal flow.
+            let adoluna_user = if password::approve_mode() != ApproveMode::Click {
+                crate::adoluna_auth::check_login_ticket(
+                    &lr.adoluna_ticket,
+                    &lr.my_id,
+                    &self.hash.challenge,
+                )
+            } else {
+                None
+            };
+            if let Some(user) = adoluna_user {
+                log::info!("Adoluna account login accepted: user={user} from={}", lr.my_id);
+                if !self.send_logon_response_and_keep_alive().await {
+                    return false;
+                }
+                self.try_start_cm(lr.my_id, lr.my_name, self.authorized);
+            } else if !lr.adoluna_ticket.is_empty() && lr.password.is_empty() {
+                // Ticket refused and no password supplied: ask the controller for the password.
+                self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_EMPTY)
+                    .await;
+                self.try_start_cm(lr.my_id, lr.my_name, false);
+            } else if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
                 || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
             {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
