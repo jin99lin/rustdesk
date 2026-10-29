@@ -17,6 +17,7 @@ STATE = os.path.join(DIR, "state.json")
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = Ed25519PrivateKey.from_private_bytes(open(os.path.join(DIR, "signing.key"), "rb").read())
 LOCK = threading.Lock()
+PEERUI = os.environ.get("PW_PEERUI", "1") == "1"  # set PW_PEERUI=0 to disable the injected device-list UI
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
        "transfer-encoding", "upgrade", "content-length", "host"}
 
@@ -84,6 +85,11 @@ class H(BaseHTTPRequestHandler):
         hdr["Host"] = self.headers.get("Host", "%s:%d" % LISTEN)
         if "X-Forwarded-For" not in self.headers and "X-Real-IP" not in self.headers:
             hdr["X-Forwarded-For"] = hdr["X-Real-IP"] = self.client_address[0]
+        idx = self.command == "GET" and self.path.split("?")[0] in ("/_admin", "/_admin/", "/_admin/index.html")
+        if idx:  # we rewrite the admin index: ask upstream for a plain, uncached copy
+            for k in list(hdr):
+                if k.lower() in ("accept-encoding", "if-none-match", "if-modified-since"):
+                    del hdr[k]
         try:
             r, data = self.upstream(self.command, self.path, body, hdr)
         except Exception as e:
@@ -91,6 +97,12 @@ class H(BaseHTTPRequestHandler):
         if self.command == "POST" and self.path.split("?")[0] == "/api/heartbeat" and r.status == 200:
             data = self.add_pw(body, data)
         extra = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP and k.lower() != "content-type"]
+        if idx and r.status == 200 and b"</head>" in data and PEERUI:
+            data = data.replace(b"<head>", b"<head><script>try{if(!localStorage.getItem('adoluna_lang_init')){localStorage.setItem('lang','zh-CN');"
+                                b"localStorage.setItem('adoluna_lang_init','1')}}catch(e){}</script>", 1)
+            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=3">'
+                                b'<script src="/_admin/adoluna-peerui.js?v=3" defer></script></head>', 1)
+            extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
         self.send(r.status, data, r.getheader("Content-Type", "application/octet-stream"), extra)
 
     def add_pw(self, req, data):
@@ -140,6 +152,30 @@ class H(BaseHTTPRequestHandler):
                 return self.send(403, b"forbidden", "text/plain")
             return self.send(200, open(os.path.join(HERE, "password.html"), "rb").read(), "text/html; charset=utf-8",
                              [("Cache-Control", "no-store")])
+        if path in ("/_admin/adoluna-peerui.js", "/_admin/adoluna-peerui.css"):
+            f = os.path.join(HERE, path.rsplit("-", 1)[1])
+            ct = "application/javascript; charset=utf-8" if f.endswith(".js") else "text/css; charset=utf-8"
+            return self.send(200, open(f, "rb").read(), ct, [("Cache-Control", "no-cache")])
+        if path == "/_admin/adoluna-api/reset":
+            if self.command != "POST" or not self.admin_ok():
+                return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台"}).encode())
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                dev = str(json.loads(self.rfile.read(n) or b"{}").get("id", "")).strip()
+            except Exception:
+                dev = ""
+            if not dev.isdigit() or not known_peer(dev):
+                return self.send(400, json.dumps({"error": "设备 ID 无效"}).encode())
+            with LOCK:
+                st = load(); t = st.get("targets", [])
+                if not t:
+                    note = "已在推送范围（全部设备）"
+                elif dev in t:
+                    note = "已在推送范围"
+                else:
+                    st["targets"] = (t + [dev])[:200]; save(st); note = "已加入推送范围"
+            out = self.status(); out["note"] = note
+            return self.send(200, json.dumps(out).encode())
         if path != "/_admin/adoluna-api/password":
             return self.send(404, b"{}")
         if not self.admin_ok():
