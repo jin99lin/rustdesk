@@ -48,3 +48,22 @@
 .list-query .el-form--inline.adp-af .el-form-item:has(button){margin-left:auto!important}
 .list-query .el-form--inline.adp-af .el-form-item:has(button) .el-form-item__content{display:flex;flex-wrap:nowrap;gap:8px}
 .list-query .el-form--inline.adp-af .el-form-item:has(button) .el-button{margin-left:0!important}
+/* 20261029 batch 2: layout */
+.app-main .el-table .cell{word-break:normal!important;overflow-wrap:normal}
+.app-main .el-table th .cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app-main td.adp-date .cell{white-space:nowrap}
+.app-main td.adp-act .cell{white-space:nowrap;display:flex;gap:4px;justify-content:center;flex-wrap:nowrap;overflow:hidden}
+.app-main td.adp-act .cell .el-button{height:24px;padding:0 8px;font-size:12px;margin:0!important;border-radius:4px}
+.app-main .el-table__cell .cell .el-button .adp-i{display:none;font-style:normal}
+.app-main td.adp-act .cell.adp-ico .el-button{padding:0 6px;min-width:26px}
+.app-main td.adp-act .cell.adp-ico .el-button>span{font-size:0}.app-main td.adp-act .cell.adp-ico .el-button .adp-i{display:inline;font-size:13px}
+.app-main .list-query.adp-tbar{margin-bottom:0!important;border-bottom-left-radius:0;border-bottom-right-radius:0;box-shadow:none!important;border-bottom:0}
+.app-main .list-query.adp-tbar>.el-card__body{padding:12px 20px}
+.app-main .el-card.adp-joined{margin-top:0!important;border-top-left-radius:0;border-top-right-radius:0;border-top:1px solid #F0F1F3}
+.app-main .el-card.adp-joined>.el-card__body{padding-top:8px}
+#adp .bar{flex-wrap:wrap}#adp .bar #adp-q{flex:1 1 220px;min-width:180px;max-width:320px;width:auto!important}
+#adp .bar select{flex:0 1 auto;min-width:120px;max-width:220px}#adp .bar .btn{white-space:nowrap;flex:none}
+#adp .bar #adp-n{white-space:nowrap}
+#adp table{table-layout:auto}#adp td{vertical-align:middle}#adp td,#adp th{padding:8px 10px}#adp th{white-space:nowrap}#adp td:first-child,#adp td.ck+td,#adp td.mono{white-space:nowrap}
+#adp .ck{width:28px;padding-right:0}#adp .ck input{height:auto;width:auto}
+#adp .card{overflow-x:auto}

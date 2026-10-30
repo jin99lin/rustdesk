@@ -55,12 +55,12 @@ function openD(p){if(!p)return;const w=document.createElement("div");w.id="adp-d
   async()=>{await api("/peer/delete",{row_id:p.row_id});toast(T("已删除","Deleted"));close();S.list=S.list.filter(x=>x!==p);renderList()},T("删除","Delete"),String(p.id))}
 const isPeerPage=()=>/\/user\/peer(\?|$)/.test(location.hash||"")||/\/user\/peer\/?$/.test(location.pathname);
 const abView=()=>{const h=location.hash||"";return /^#\/user\/addressBook(\?|$)/.test(h)?"absys":/^#\/my\/address_book(\?|$)/.test(h)?"abmy":null};
-const curView=()=>isPeerPage()?"peer":abView();
+const curView=()=>isPeerPage()?"peer":/^#\/(\?.*)?$/.test(location.hash||"")?"mypeer":abView();
 const deb=(f,ms)=>{let k=0;return(...a)=>{clearTimeout(k);k=setTimeout(()=>f(...a),ms||300)}};
 function mount(){const main=document.querySelector(".app-main")||document.querySelector(".el-main");if(!main)return;const v=curView();
  const o=document.getElementById("adp");if(o&&o.dataset.v!==v){o.remove();[...main.children].forEach(c=>c.classList.remove("adp-hidden"))}
  if(!v)return;[...main.children].forEach(c=>{if(c.id!=="adp")c.classList.add("adp-hidden")});if(document.getElementById("adp"))return;
- if(v!=="peer")return abMount(main,v);
+ if(v==="mypeer")return myMount(main);if(v!=="peer")return abMount(main,v);
  root=document.createElement("div");root.id="adp";root.dataset.v="peer";root.innerHTML='<div class="card"><div class="bar"><input id="adp-q" placeholder="'+T('设备 ID / 主机名','Device ID / hostname')+'" style="width:200px"><input id="adp-u" placeholder="'+T('用户名','Username')+'" style="width:150px"><button class="btn txt" id="adp-r">'+T('重置','Reset')+'</button></div><table><thead><tr><th>'+T('设备 ID','Device ID')+'</th><th>'+T('主机名','Hostname')+'</th><th>'+T('系统','OS')+'</th><th>'+T('状态','Status')+'</th><th>'+T('用户名','Username')+'</th></tr></thead><tbody id="adp-tb"><tr><td colspan=5>'+T('读取中…','Loading…')+'</td></tr></tbody></table><div id="adp-n" style="margin-top:14px;color:#6B7280;font-size:13px"></div></div>';
  main.appendChild(root);const q=root.querySelector("#adp-q"),u=root.querySelector("#adp-u");
  const go=deb(()=>{S.q=q.value.trim();S.u=u.value.trim();renderList()},250);q.oninput=u.oninput=go;
@@ -136,6 +136,38 @@ function abAdd(){const sys=AB.v==="absys",me=AB.me||{};let pick=null;
  const dl=[...document.querySelectorAll(".adp-dlg")].pop();dl.classList.add("wide");const ok=dl.querySelector("[data-o]");ok.disabled=true;
  const ac=dl.querySelector("#adp-ac"),au=dl.querySelector("#adp-au");const fc=()=>{ac.innerHTML=colOpts(sys?(au?au.value:me.id):null,AB.c!==""?AB.c:"0",false)};fc();if(au)au.onchange=fc;
  picker(dl.querySelector("#adp-pk"),d=>{pick=d;ok.disabled=false;dl.querySelector("#adp-asel").innerHTML=T("已选：","Selected: ")+'<b class="adp-mono">'+esc(d.id)+'</b> · '+esc(devName(d))+(d.group?' · '+esc(d.group):'')})}
+/* ---- My Devices (Jay 10/29 batch 2): same look as System › Devices; Export + batch add to address book kept ---- */
+let MY={list:[],q:"",sel:new Set(),cols:[]};
+function myRows(){return MY.list.filter(p=>!MY.q||qMatch(MY.q,hay([p.id,p.hostname,p.alias,p.username,osName(p.os)]))).sort((a,b)=>(isOn(b)-isOn(a))||(b.last_online_time-a.last_online_time))}
+function myRender(){const R=document.getElementById("adp");if(!R)return;const r=myRows();
+ R.querySelector("#adp-tb").innerHTML=r.map(p=>'<tr class="r" data-id="'+esc(p.row_id)+'"><td class="ck"><input type="checkbox"'+(MY.sel.has(p.row_id)?" checked":"")+'></td><td class="adp-mono">'+esc(p.id)+'</td><td>'+esc(p.alias||p.hostname)+'</td><td>'+esc(osName(p.os))+'</td><td>'+stHtml(p)+'</td><td>'+esc(p.username||"—")+'</td></tr>').join("")||'<tr><td colspan=6 style="text-align:center;color:#6B7280">'+T("没有设备","No devices")+'</td></tr>';
+ R.querySelector("#adp-n").textContent=T("共 "+r.length+" 台",r.length+(r.length===1?" device":" devices"));const bb=R.querySelector("#adp-bat");bb.disabled=!MY.sel.size;bb.textContent=T("批量加入地址簿","Add to address book")+(MY.sel.size?" ("+MY.sel.size+")":"");
+ R.querySelectorAll("tr.r").forEach(t=>{const id=Number(t.dataset.id);const c=t.querySelector("input");c.onclick=e=>{e.stopPropagation();c.checked?MY.sel.add(id):MY.sel.delete(id);myRender()};t.onclick=()=>myDrawer(MY.list.find(p=>p.row_id===id))})}
+function myDrawer(p){if(!p)return;const R=document.getElementById("adp"),w=document.createElement("div");w.id="adp-d";const ro=(l,v)=>'<label>'+l+'</label><span>'+esc(v||"—")+'</span>';
+ w.innerHTML='<div class="mask"></div><div class="drw"><div class="dh"><h2><span><span class="adp-mono">'+esc(p.id)+'</span> · '+esc(p.alias||p.hostname)+'</span><span class="x">✕</span></h2><div class="sub">'+stHtml(p)+' · '+esc(osName(p.os))+'</div></div>'+
+ '<div class="db"><div class="sec"><h3>'+T("设备信息","Device info")+'</h3><div class="f">'+ro(T("设备 ID","Device ID"),p.id)+ro(T("主机名","Hostname"),p.hostname)+ro(T("别名","Alias"),p.alias)+ro(T("用户名","Username"),p.username)+ro(T("系统","OS"),p.os)+ro(T("处理器","CPU"),p.cpu)+ro(T("内存","Memory"),p.memory)+ro(T("最后 IP","Last IP"),p.last_online_ip)+ro(T("客户端版本","Client version"),p.version)+ro(T("最后在线","Last online"),fmtET(p.last_online_time))+'</div></div></div>'+
+ '<div class="df"><span style="flex:1"></span><a class="btn" href="adolunasupport://'+encodeURIComponent(p.id)+'" style="display:inline-flex;align-items:center;text-decoration:none">'+T("远程连接","Connect")+'</a><button class="btn pri" data-a="fav">'+T("加入地址簿","Add to address book")+'</button></div></div>';
+ R.appendChild(w);const close=()=>w.remove();w.querySelector(".mask").onclick=close;w.querySelector(".x").onclick=close;w.querySelector('[data-a="fav"]').onclick=()=>{close();myBatch([p.row_id])}}
+function myBatch(ids){dialog('<h4>'+T("加入地址簿","Add to address book")+'</h4><div style="line-height:1.7">'+T("把 "+ids.length+" 台设备加入：","Add "+ids.length+(ids.length===1?" device":" devices")+" to:")+'</div><select id="adp-bc" style="width:100%;height:32px;margin-top:8px"><option value="0">'+esc(DEF_AB())+'</option>'+MY.cols.map(c=>'<option value="'+c.id+'">'+esc(c.name)+'</option>').join("")+'</select><div class="adp-hint" style="margin-top:8px">'+T("已在该地址簿里的设备会跳过。","Devices already in that address book are skipped.")+'</div>',
+ async()=>{await api("/my/address_book/batchCreateFromPeers",{peer_ids:ids,collection_id:Number(document.getElementById("adp-bc").value)||0,tags:[]});toast(T("已加入地址簿","Added to address book"));MY.sel.clear();myRender()},T("加入","Add"))}
+function myExport(){const r=myRows(),h=["ID","Hostname","Alias","Username","OS","Version","Last IP","Last online (ET)"];const q=v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';
+ const csv="\ufeff"+[h].concat(r.map(p=>[p.id,p.hostname,p.alias,p.username,p.os,p.version,p.last_online_ip,fmtET(p.last_online_time)])).map(x=>x.map(q).join(",")).join("\r\n");
+ const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="my-devices.csv";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
+function myMount(main){MY.q="";MY.sel=new Set();const R=document.createElement("div");R.id="adp";R.dataset.v="mypeer";
+ R.innerHTML='<div class="card"><div class="bar"><input id="adp-q" placeholder="'+T("设备 ID / 主机名 / 用户名","Device ID / hostname / username")+'" style="flex:0 1 280px;min-width:180px"><button class="btn txt" id="adp-r">'+T("重置","Reset")+'</button><span style="flex:1"></span><span id="adp-n" class="adp-hint"></span><button class="btn" id="adp-exp">'+T("导出","Export")+'</button><button class="btn pri" id="adp-bat" disabled></button></div>'+
+ '<table><thead><tr><th class="ck"><input type="checkbox" id="adp-all"></th><th>'+T("设备 ID","Device ID")+'</th><th>'+T("主机名","Hostname")+'</th><th>'+T("系统","OS")+'</th><th>'+T("状态","Status")+'</th><th>'+T("用户名","Username")+'</th></tr></thead><tbody id="adp-tb"><tr><td colspan=6 style="text-align:center;color:#6B7280">'+T("加载中…","Loading…")+'</td></tr></tbody></table></div>';
+ main.appendChild(R);const q=R.querySelector("#adp-q");q.oninput=deb(()=>{MY.q=q.value.trim();myRender()},200);R.querySelector("#adp-r").onclick=()=>{q.value="";MY.q="";myRender()};
+ R.querySelector("#adp-exp").onclick=myExport;R.querySelector("#adp-bat").onclick=()=>MY.sel.size&&myBatch([...MY.sel]);
+ R.querySelector("#adp-all").onclick=e=>{myRows().forEach(p=>e.target.checked?MY.sel.add(p.row_id):MY.sel.delete(p.row_id));myRender()};
+ Promise.all([api("/my/peer/list"+PS),api("/my/address_book_collection/list"+PS).catch(()=>({list:[]}))]).then(([a,b])=>{MY.list=a.list||[];MY.cols=b.list||[];myRender()}).catch(e=>{R.querySelector("#adp-tb").innerHTML='<tr><td colspan=6 style="color:#C62828">'+T("读取失败：","Failed to load: ")+esc(e.message)+'</td></tr>'})}
+/* ---- tables (batch 2): compact action buttons, icons + tooltip when they don't fit, hide Web Client buttons ---- */
+const ICO={"Edit":"✎","编辑":"✎","Delete":"🗑","删除":"🗑","Link":"🔗","连接":"🔗","Share Rules":"⇄","共享规则":"⇄","UserTags":"🏷","User Tags":"🏷","用户标签":"🏷","User Address Book":"📒","用户地址簿":"📒","Reset password":"↺","Disable":"⏸","Enable":"▶","禁用":"⏸","启用":"▶"};
+function tables(){document.querySelectorAll(".app-main .el-table__cell .cell .el-button").forEach(b=>{if(b.dataset.adpT)return;const t=b.textContent.trim();b.dataset.adpT=t;b.title=t;
+  if(/^(Web Client|Share By Web Client|Web客户端|通过Web客户端分享|Web 客户端)$/i.test(t)||/web\s*client|web客户端/i.test(t))b.classList.add("adp-hidden");
+  const s=b.querySelector("span");if(s&&!s.querySelector(".adp-i"))s.insertAdjacentHTML("afterbegin",'<i class="adp-i">'+(ICO[t]||t.charAt(0))+'</i>')});
+ document.querySelectorAll(".app-main td.adp-act .cell").forEach(c=>{c.classList.remove("adp-ico");if(c.scrollWidth>c.clientWidth+1)c.classList.add("adp-ico")});
+ document.querySelectorAll(".app-main .list-query").forEach(q=>{const n=q.nextElementSibling;if(n&&n.classList.contains("el-card"))n.classList.add("adp-joined");q.classList.add("adp-tbar")})}
+window.addEventListener("resize",deb(tables,150));
 /* other list pages: no Filter button, search as you type, tidy buttons */
 function autoFilter(){const f=document.querySelector(".app-main .list-query .el-form");if(!f||f.closest(".adp-hidden"))return;
  const b=[...f.querySelectorAll("button")].find(x=>/^(筛选|Filter)$/.test(x.textContent.trim()));if(!b)return;b.classList.add("adp-hidden");f.classList.add("adp-af");
@@ -173,6 +205,6 @@ function userReset(){if(!onUsers()||document.getElementById("adp-ur"))return;con
 const EN_FIX={"MyPeer":"My Devices","Groups":"User Groups","Oauth":"OAuth","Peers":"Devices","Address Book Name":"Address Book Groups","Device Group Manage":"Device Groups","Server Cmd":"Server Commands","Share Record":"Share Records","User Token":"User Tokens","Login Log":"Login Logs","Connection Log":"Connection Logs","File Log":"File Logs"};
 function relabel(){if(!EN())return;document.querySelectorAll(".el-menu span,.el-menu .el-sub-menu__title,.tags-view-item,.el-breadcrumb__inner,.el-tag__content,.el-tabs__item").forEach(e=>{if(e.children.length)return;const v=EN_FIX[e.textContent.trim()];if(v)e.textContent=v})}
 let t=0,curLang=LG();function langCheck(){const l=LG();if(l===curLang)return;curLang=l;["adp-forgot","adp-ur"].forEach(i=>{const x=document.getElementById(i);if(x)x.remove()});const a=document.getElementById("adp-menu");if(a)a.remove();const d=document.getElementById("adp-d");if(d)d.remove();const o=document.getElementById("adp");if(o)o.remove()}
-new MutationObserver(()=>{clearTimeout(t);t=setTimeout(()=>{langCheck();menu();mount();relabel();autoFilter();loginLink();mustCheck();userReset()},60)}).observe(document.documentElement,{childList:true,subtree:true});
+new MutationObserver(()=>{clearTimeout(t);t=setTimeout(()=>{langCheck();menu();mount();relabel();autoFilter();tables();loginLink();mustCheck();userReset()},60)}).observe(document.documentElement,{childList:true,subtree:true});
 window.addEventListener("hashchange",()=>setTimeout(mount,100));window.addEventListener("popstate",()=>setTimeout(mount,100));
 })();

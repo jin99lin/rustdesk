@@ -23,6 +23,44 @@ PEERUI = os.environ.get("PW_PEERUI", "1") == "1"  # set PW_PEERUI=0 to disable t
 UNHIDE = [(b'meta:{title:"UserManage",hide:!0,', b'meta:{title:"UserManage",'),
           (b'meta:{title:"GroupManage",hide:!0,', b'meta:{title:"GroupManage",'),
           (b'meta:{title:"OauthManage",hide:!0,', b'meta:{title:"OauthManage",')]
+import re
+# Jay 10/29 batch 2: compact action columns, nowrap date columns (rewrite admin page chunks on the fly)
+_ACT = re.compile(rb'(label:[\w$]+\([\w$]+\)\("Actions"\),align:"center")([^{}]*)\}')
+_DATE = re.compile(rb'(label:[\w$]+\([\w$]+\)\("(?:CreatedAt|UpdatedAt|LastOnlineTime|CloseTime|ExpireTime)"\)(?:,prop:"\w+")?,align:"center")([^{}]*)\}')
+def _strip(rest):
+    rest = re.sub(rb',(?:width|"min-width"|"class-name"):"[^"]*"', b"", rest)
+    return rest
+def _act(m):
+    w = re.search(rb'(?<!-)width:"(\d+)"', m.group(2))
+    nw = max(130, min(300, int(int(w.group(1)) * 0.5))) if w else 150
+    rest = re.sub(rb',fixed:"right"', b"", _strip(m.group(2)))
+    return m.group(1) + b',width:"%d","class-name":"table-actions adp-act",fixed:"right"' % nw + rest + b"}"
+def _date(m):
+    return m.group(1) + b',width:"180","class-name":"adp-date"' + _strip(m.group(2)) + b"}"
+_NAME = re.compile(rb'(label:[\w$]+\([\w$]+\)\("(?:Name|AddressBookName|Username|Nickname|Email|Hostname|Alias|Remark|Group|Owner)"\)(?:,prop:"\w+")?,align:"center")([^{}]*)\}')
+def _name(m):
+    if re.search(rb'(?<!-)width:"', m.group(2)):
+        return m.group(0)
+    return m.group(1) + b',"min-width":"130"' + re.sub(rb',"min-width":"[^"]*"', b"", m.group(2)) + b"}"
+def fix_chunk(data):
+    return _NAME.sub(_name, _DATE.sub(_date, _ACT.sub(_act, data)))
+CHUNK_V = b"adp2"
+_ROOTS = None
+def chunk_roots(fetch):
+    """page chunks that no other chunk imports: safe to cache-bust from the entry without loading a module twice"""
+    global _ROOTS
+    if _ROOTS is None:
+        try:
+            names = set(re.findall(rb'\.\./chunk/([\w-]+\.js)', fetch("ENTRY")))
+            imported = set()
+            for n in names:
+                body = fetch(n)
+                imported |= set(re.findall(rb'\./([\w-]+\.js)', body)) - {n}
+            _ROOTS = {n for n in names if not n.startswith(b"_") and n not in imported}
+        except Exception:
+            return set()
+    return _ROOTS
+
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
        "transfer-encoding", "upgrade", "content-length", "host"}
 
@@ -139,7 +177,8 @@ class H(BaseHTTPRequestHandler):
             hdr["X-Forwarded-For"] = hdr["X-Real-IP"] = self.client_address[0]
         idx = self.command == "GET" and self.path.split("?")[0] in ("/_admin", "/_admin/", "/_admin/index.html")
         ent = self.command == "GET" and self.path.split("?")[0].startswith("/_admin/static/entry/index-") and self.path.split("?")[0].endswith(".js")
-        if idx or ent:  # we rewrite the admin index: ask upstream for a plain, uncached copy
+        chk = self.command == "GET" and PEERUI and self.path.split("?")[0].startswith("/_admin/static/chunk/") and self.path.split("?")[0].endswith(".js")
+        if idx or ent or chk:  # we rewrite the admin index: ask upstream for a plain, uncached copy
             for k in list(hdr):
                 if k.lower() in ("accept-encoding", "if-none-match", "if-modified-since"):
                     del hdr[k]
@@ -181,13 +220,23 @@ class H(BaseHTTPRequestHandler):
         if idx and r.status == 200 and b"</head>" in data and PEERUI:
             data = data.replace(b"<head>", b"<head><script>try{if(!localStorage.getItem('adoluna_lang_init')){localStorage.setItem('lang','zh-CN');"
                                 b"localStorage.setItem('adoluna_lang_init','1')}}catch(e){}</script>", 1)
-            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=4">'
-                                b'<script src="/_admin/adoluna-peerui.js?v=4" defer></script></head>', 1)
+            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=5">'
+                                b'<script src="/_admin/adoluna-peerui.js?v=5" defer></script></head>', 1)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
         if ent and r.status == 200 and PEERUI:  # admin build hides these menus; admins need Users (email, reset password)
             for a, b in UNHIDE:
                 data = data.replace(a, b)
+            def _fetch(n, _p=self.path):
+                u = _p.split("?")[0] if n == "ENTRY" else "/_admin/static/chunk/" + n.decode()
+                return self.upstream("GET", u, None, {"Host": hdr["Host"]})[1]
+            roots = chunk_roots(_fetch)
+            data = re.sub(rb'\.\./chunk/([\w-]+\.js)(?=")', lambda m: m.group(0) + (b"?v=" + CHUNK_V if m.group(1) in roots else b""), data)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-cache")]
+        if chk and r.status == 200:
+            nd = fix_chunk(data)
+            if nd != data:
+                data = nd
+                extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-cache")]
         self.send(r.status, data, r.getheader("Content-Type", "application/octet-stream"), extra)
 
     def add_pw(self, req, data):
