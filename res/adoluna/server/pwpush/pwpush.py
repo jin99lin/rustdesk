@@ -10,6 +10,7 @@ from hashlib import sha256
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import accounts as ACC
+import merchants as M
 
 LISTEN = (os.environ.get("PW_LISTEN", "10.20.26.62"), int(os.environ.get("PW_PORT", "21114")))
 UP = (os.environ.get("PW_UP_HOST", "127.0.0.1"), int(os.environ.get("PW_UP_PORT", "21124")))
@@ -123,6 +124,17 @@ def ab_id_problem(path, body, zh):
     return ("设备 ID %s 不在系统设备列表里，请从已有设备中选择" % dev) if zh else \
         ("Device ID %s is not in the device list. Pick an existing device." % dev)
 
+def fix_platform(body):
+    """Jay 10/30: the admin "Add" stored the whole OS string ("Windows 10 Pro - 10 (19045)") as platform, so the
+    client showed no icon.  The client expects Windows / Mac OS / Linux / Android."""
+    try:
+        q = json.loads(body or b"{}")
+        if isinstance(q, dict) and q.get("platform"):
+            q["platform"] = M.platform(q["platform"]); return json.dumps(q, ensure_ascii=False).encode()
+    except Exception:
+        pass
+    return body
+
 def device_index():
     """Compact list of every device with its store (device group) and address-book tags, for the admin search box."""
     c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=3)
@@ -187,6 +199,8 @@ def peer_group(peer_id):
 
 def granted(uid, gid, is_admin, peer_id):
     if is_admin:
+        return True
+    if M.granted(uid, bool(is_admin), peer_id):  # merchant model: positions covering the device's store
         return True
     pg = peer_group(peer_id)
     with acl() as c:
@@ -257,12 +271,34 @@ def clear_custom(st, peer):
     (custom) version is above the batch version still takes it."""
     if st.get("custom", {}).pop(peer, None) is None:
         return None
-    p = st.get("payload")
+    return reissue(st, peer)
+
+def reissue(st, peer):
+    """re-sign the device's base password (merchant or batch) with a fresh version so it applies even if the
+    device's applied version is higher (after a custom password, or after moving between merchants)."""
+    p, src = base_payload(st, peer)
     if not p:
         return None
     v = next_v(st)
-    st.setdefault("reissue", {})[peer] = {"v": v, "sig": _sign(v, p["h"], p["s"])}
+    st.setdefault("reissue", {})[peer] = {"v": v, "sig": _sign(v, p["h"], p["s"]), "src": src}
     return v
+
+def base_payload(st, dev):
+    """(payload, source) without per-device passwords: the merchant's fixed password wins over the batch scope"""
+    mid = M.peer_merchant(dev)
+    mp = st.get("merchants", {}).get(str(mid)) if mid else None
+    if mp:
+        return mp, "m%s" % mid
+    p = st.get("payload")
+    if p and in_scope(st, dev):
+        return p, "batch"
+    return None, None
+
+def set_merchant_pw(st, mid, pw, by):
+    p = pw_payload(st, pw); p.update(at=now_s(), by=by)
+    st.setdefault("merchants", {})[str(mid)] = p
+    st["reissue"] = {k: x for k, x in st.get("reissue", {}).items() if x.get("src") != "m%s" % mid}
+    return p["v"]
 
 _SCOPE_CACHE = {"k": None, "t": 0, "set": set()}
 def scope_peers(sc):
@@ -306,11 +342,11 @@ def effective(st, dev):
     c = st.get("custom", {}).get(dev)
     if c:
         return {k: c[k] for k in ("v", "h", "s", "sig")}
-    p = st.get("payload")
-    if not p or not in_scope(st, dev):
+    p, src = base_payload(st, dev)
+    if not p:
         return None
     r = st.get("reissue", {}).get(dev)
-    if r and int(r["v"]) > int(p["v"]):
+    if r and r.get("src", "batch") == src and int(r["v"]) > int(p["v"]):
         return {"v": r["v"], "h": p["h"], "s": p["s"], "sig": r["sig"]}
     return dict(p)
 
@@ -413,6 +449,7 @@ class H(BaseHTTPRequestHandler):
                 bad = ab_id_problem(path0, body, not str(self.headers.get("Accept-Language", "zh")).lower().startswith("en"))
                 if bad:
                     return self.send(200, json.dumps({"code": 101, "message": bad, "data": None}, ensure_ascii=False).encode())
+                body = fix_platform(body)
         try:
             r, data = self.upstream(self.command, self.path, body, hdr)
         except Exception as e:
@@ -430,8 +467,9 @@ class H(BaseHTTPRequestHandler):
         if idx and r.status == 200 and b"</head>" in data and PEERUI:
             data = data.replace(b"<head>", b"<head><script>try{if(!localStorage.getItem('adoluna_lang_init')){localStorage.setItem('lang','zh-CN');"
                                 b"localStorage.setItem('adoluna_lang_init','1')}}catch(e){}</script>", 1)
-            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=8">'
-                                b'<script src="/_admin/adoluna-peerui.js?v=8" defer></script></head>', 1)
+            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=9">'
+                                b'<script src="/_admin/adoluna-peerui.js?v=9" defer></script>'
+                                b'<link rel="stylesheet" href="/_admin/adoluna-merchui.css?v=2"><script src="/_admin/adoluna-merchui.js?v=2" defer></script></head>', 1)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
         if ent and r.status == 200 and PEERUI:  # admin build hides these menus; admins need Users (email, reset password)
             for a, b in UNHIDE:
@@ -629,7 +667,11 @@ class H(BaseHTTPRequestHandler):
             tgt = set()
         cust = {k: {"v": x["v"], "at": x.get("at"), "by": x.get("by")} for k, x in st.get("custom", {}).items()}
         devs = {}
-        for d in tgt | set(cust):
+        try:
+            mdev = {str(i) for i in M.peer_merchant_all() if st.get("merchants", {}).get(str(M.peer_merchant(i)))}
+        except Exception:
+            mdev = set()
+        for d in tgt | set(cust) | mdev:
             e = effective(st, d)
             devs[d] = {"custom": d in cust, "want": e["v"] if e else 0, "have": (sn.get(d) or {}).get("ver")}
         return {"version": st.get("v", 0), "updated_at": st.get("updated_at"), "updated_by": st.get("updated_by"),
@@ -650,7 +692,9 @@ class H(BaseHTTPRequestHandler):
                 return self.send(403, b"forbidden", "text/plain")
             return self.send(200, open(os.path.join(HERE, "password.html"), "rb").read(), "text/html; charset=utf-8",
                              [("Cache-Control", "no-store")])
-        if path in ("/_admin/adoluna-peerui.js", "/_admin/adoluna-peerui.css"):
+        if path.startswith("/_admin/adoluna-api/m/"):
+            return self.merch(path)
+        if path in ("/_admin/adoluna-peerui.js", "/_admin/adoluna-peerui.css", "/_admin/adoluna-merchui.js", "/_admin/adoluna-merchui.css"):
             f = os.path.join(HERE, path.rsplit("-", 1)[1])
             ct = "application/javascript; charset=utf-8" if f.endswith(".js") else "text/css; charset=utf-8"
             return self.send(200, open(f, "rb").read(), ct, [("Cache-Control", "no-cache")])
@@ -788,6 +832,8 @@ class H(BaseHTTPRequestHandler):
             return self.jout(200, {"temp_password": tmp})
         return self.jout(404, {})
 
+    from merch_api import merch  # merchant pages API (merch_api.py)
+
     def handle_any(self):
         if self.path.split("?")[0] == "/api/adoluna/ticket":
             return self.ticket()
@@ -825,4 +871,9 @@ if __name__ == "__main__" and len(sys.argv) > 1:
 if __name__ == "__main__":
     ThreadingHTTPServer.daemon_threads = True
     ThreadingHTTPServer.request_queue_size = 128
+    try:
+        M.md().close(); M.reconcile()
+    except Exception as e:
+        sys.stderr.write("reconcile at start failed: %s\n" % e)
+    M.loop(int(os.environ.get("PW_RECONCILE", "60")))
     ThreadingHTTPServer(LISTEN, H).serve_forever()
