@@ -994,6 +994,10 @@ async fn handle(data: Data, stream: &mut Connection) {
                     if value.is_empty() {
                         log::warn!("Ignoring empty id write over IPC");
                         updated = false;
+                    } else if Config::is_disable_change_id() {
+                        // Adoluna b78: ID changes are disabled on merchant devices.
+                        log::warn!("Ignoring id write over IPC: changing ID is disabled");
+                        updated = false;
                     } else {
                         Config::set_key_confirmed(false);
                         Config::set_id(&value);

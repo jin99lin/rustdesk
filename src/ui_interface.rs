@@ -1499,6 +1499,10 @@ pub async fn change_id_shared(id: String, old_id: String) -> String {
 }
 
 pub async fn change_id_shared_(id: String, old_id: String) -> &'static str {
+    if config::Config::is_disable_change_id() {
+        log::warn!("Changing ID is disabled");
+        return UNKNOWN_ERROR;
+    }
     if !hbb_common::is_valid_custom_id(&id) {
         log::debug!(
             "debugging invalid id: \"{id}\", len: {}, base64: \"{}\"",

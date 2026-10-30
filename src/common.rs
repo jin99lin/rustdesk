@@ -2374,7 +2374,27 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+/// Adoluna b78: merchant devices must not change their ID or connection/security
+/// configuration. Passwords arrive via signed backend push (sync.rs, bypasses
+/// these UI locks); passwordless access via server-side authorization.
+pub fn adoluna_apply_locks() {
+    let mut b = config::BUILTIN_SETTINGS.write().unwrap();
+    for k in [
+        "disable-change-id",
+        "disable-change-permanent-password",
+        "hide-security-settings",
+        "hide-network-settings",
+        "hide-server-settings",
+        "hide-proxy-settings",
+        "hide-websocket-settings",
+        "hide-stop-service",
+    ] {
+        b.insert(k.to_owned(), "Y".to_owned());
+    }
+}
+
 pub fn load_custom_client() {
+    adoluna_apply_locks();
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
@@ -2473,6 +2493,7 @@ pub fn get_dst_align_rgba() -> usize {
 }
 
 pub fn read_custom_client(config: &str) {
+    adoluna_apply_locks();
     let Ok(data) = decode64(config) else {
         log::error!("Failed to decode custom client config");
         return;
@@ -3826,5 +3847,17 @@ mod tests {
     #[tokio::test]
     async fn test_ipv6_route_probe_does_not_wait_on_the_network() {
         assert!(hbb_common::timeout(1_000, test_bind_ipv6()).await.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod adoluna_lock_tests {
+    #[test]
+    fn locks_applied() {
+        super::adoluna_apply_locks();
+        assert!(hbb_common::config::Config::is_disable_change_id());
+        assert!(hbb_common::config::Config::is_disable_change_permanent_password());
+        assert_eq!(super::get_builtin_option("hide-security-settings"), "Y");
+        assert_eq!(super::get_builtin_option("hide-network-settings"), "Y");
     }
 }

@@ -23,10 +23,8 @@ class ServerPage extends StatefulWidget implements PageShape {
   final icon = const Icon(Icons.mobile_screen_share);
 
   @override
-  final appBarActions = (!bind.isDisableSettings() &&
-          bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
-      ? [_DropDownAction()]
-      : [];
+  // Adoluna b78: the top-right settings menu is hidden for merchants.
+  final appBarActions = <Widget>[];
 
   ServerPage({Key? key}) : super(key: key);
 
@@ -622,101 +620,96 @@ class PermissionChecker extends StatefulWidget {
 }
 
 class _PermissionCheckerState extends State<PermissionChecker> {
+  // Adoluna b78: merchant-facing permissions block. When everything required
+  // is granted and the service is running, show a single "Ready" line; when
+  // something is missing, show only the missing item(s) with an enable button.
+  bool _bootOk = true;
+  Timer? _bootTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBoot();
+    _bootTimer =
+        Timer.periodic(const Duration(seconds: 3), (_) => _checkBoot());
+  }
+
+  @override
+  void dispose() {
+    _bootTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkBoot() async {
+    final r = await Future.wait([
+      AndroidPermissionManager.check(kRequestIgnoreBatteryOptimizations),
+      // overlay only needed on Android 10+ (same rule as BootReceiver)
+      androidVersion >= 29
+          ? AndroidPermissionManager.check(kSystemAlertWindow)
+          : Future.value(true),
+    ]);
+    final ok = r.every((e) => e);
+    if (mounted && ok != _bootOk) setState(() => _bootOk = ok);
+  }
+
+  Future<void> _fixBoot() async {
+    if (!await AndroidPermissionManager.check(
+        kRequestIgnoreBatteryOptimizations)) {
+      await AndroidPermissionManager.request(
+          kRequestIgnoreBatteryOptimizations);
+    }
+    if (androidVersion >= 29 &&
+        !await AndroidPermissionManager.check(kSystemAlertWindow)) {
+      await AndroidPermissionManager.request(kSystemAlertWindow);
+    }
+    gFFI.invokeMethod(AndroidChannel.kSetStartOnBootOpt, true);
+    await _checkBoot();
+  }
+
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
-    final hasAudioPermission = androidVersion >= 30;
-    final hideStopService = isAndroid &&
-        bind.mainGetBuildinOption(key: kOptionHideStopService) == 'Y';
-    final allowPermChangeInAcceptWindow = option2bool(
-        kOptionEnablePermChangeInAcceptWindow,
-        bind.mainGetBuildinOption(
-          key: kOptionEnablePermChangeInAcceptWindow,
-        ));
-    final permissionChangeLocked = isAndroid &&
-        serverModel.clients.any((c) => !c.disconnected) &&
-        !allowPermChangeInAcceptWindow;
+    final screenOk = serverModel.isStart && serverModel.mediaOk;
+    final missing = <MapEntry<String, VoidCallback>>[
+      if (!screenOk)
+        MapEntry(
+            translate("Screen Capture"),
+            gFFI.userModel.userName.value.isEmpty &&
+                    bind.mainGetLocalOption(key: "show-scam-warning") != "N"
+                ? () => showScamWarning(context, serverModel)
+                : serverModel.toggleService),
+      if (!serverModel.inputOk)
+        MapEntry(translate("Input Control"), serverModel.toggleInput),
+      if (!serverModel.fileOk)
+        MapEntry(translate("Transfer file"), serverModel.toggleFile),
+      if (!serverModel.clipboardOk)
+        MapEntry(translate("Enable clipboard"), serverModel.toggleClipboard),
+      if (!_bootOk)
+        MapEntry("${translate("Ignore Battery Optimizations")} (Start on boot)",
+            _fixBoot),
+    ];
+    if (missing.isEmpty) {
+      return PaddingCard(
+          child: Row(children: const [
+        Icon(Icons.check_circle, color: Colors.green),
+        SizedBox(width: 10),
+        Text("Ready 已就绪",
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+      ]));
+    }
     return PaddingCard(
         title: translate("Permissions"),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          serverModel.mediaOk && !hideStopService
-              ? ElevatedButton.icon(
-                      style: ButtonStyle(
-                          backgroundColor:
-                              MaterialStateProperty.all(Colors.red)),
-                      icon: const Icon(Icons.stop),
-                      onPressed: serverModel.toggleService,
-                      label: Text(translate("Stop service")))
-                  .marginOnly(bottom: 8)
-              : SizedBox.shrink(),
-          if (!hideStopService || !serverModel.mediaOk)
-            PermissionRow(
-                translate("Screen Capture"),
-                serverModel.mediaOk,
-                !serverModel.mediaOk &&
-                        gFFI.userModel.userName.value.isEmpty &&
-                        bind.mainGetLocalOption(key: "show-scam-warning") != "N"
-                    ? () => showScamWarning(context, serverModel)
-                    : serverModel.toggleService),
-          PermissionRow(
-            translate("Input Control"),
-            serverModel.inputOk,
-            serverModel.toggleInput,
-          ),
-          PermissionRow(
-            translate("Transfer file"),
-            serverModel.fileOk,
-            serverModel.toggleFile,
-            enabled: !permissionChangeLocked,
-          ),
-          hasAudioPermission
-              ? PermissionRow(translate("Audio Capture"), serverModel.audioOk,
-                  serverModel.toggleAudio,
-                  enabled: !permissionChangeLocked)
-              : Row(children: [
-                  Icon(Icons.info_outline).marginOnly(right: 15),
-                  Expanded(
-                      child: Text(
-                    translate("android_version_audio_tip"),
-                    style: const TextStyle(color: MyTheme.darkGray),
-                  ))
-                ]),
-          PermissionRow(
-            translate("Enable clipboard"),
-            serverModel.clipboardOk,
-            serverModel.toggleClipboard,
-            enabled: !permissionChangeLocked,
-          ),          // Adoluna: unattended mode needs these for start-on-boot.
-          FutureBuilder<List<bool>>(
-              // Adoluna: overlay is only required on Android 10+ (same rule as
-              // BootReceiver); below 10 (e.g. Sunmi K2_MINI) only battery counts.
-              future: Future.wait([
-                AndroidPermissionManager.check(
-                    kRequestIgnoreBatteryOptimizations),
-                androidVersion >= 29
-                    ? AndroidPermissionManager.check(kSystemAlertWindow)
-                    : Future.value(true),
-              ]),
-              builder: (context, snap) {
-                final ok = snap.data?.every((e) => e) ?? false;
-                return PermissionRow(
-                    "${translate("Ignore Battery Optimizations")} (Start on boot)",
-                    ok, () async {
-                  if (!await AndroidPermissionManager.check(
-                      kRequestIgnoreBatteryOptimizations)) {
-                    await AndroidPermissionManager.request(
-                        kRequestIgnoreBatteryOptimizations);
-                  }
-                  if (androidVersion >= 29 &&
-                      !await AndroidPermissionManager.check(
-                          kSystemAlertWindow)) {
-                    await AndroidPermissionManager.request(kSystemAlertWindow);
-                  }
-                  gFFI.invokeMethod(AndroidChannel.kSetStartOnBootOpt, true);
-                  setState(() {});
-                });
-              }),
-        ]));
+        child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: missing
+                .map((e) => Row(children: [
+                      const Icon(Icons.error_outline, color: Colors.orange)
+                          .marginOnly(right: 10),
+                      Expanded(child: Text(e.key)),
+                      ElevatedButton(
+                          onPressed: e.value, child: const Text("去开启 Enable")),
+                    ]).marginOnly(bottom: 6))
+                .toList()));
   }
 }
 
