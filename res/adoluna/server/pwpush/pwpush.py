@@ -20,6 +20,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = Ed25519PrivateKey.from_private_bytes(open(os.path.join(DIR, "signing.key"), "rb").read())
 LOCK = threading.Lock()
 PEERUI = os.environ.get("PW_PEERUI", "1") == "1"  # set PW_PEERUI=0 to disable the injected device-list UI
+UNHIDE = [(b'meta:{title:"UserManage",hide:!0,', b'meta:{title:"UserManage",'),
+          (b'meta:{title:"GroupManage",hide:!0,', b'meta:{title:"GroupManage",'),
+          (b'meta:{title:"OauthManage",hide:!0,', b'meta:{title:"OauthManage",')]
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
        "transfer-encoding", "upgrade", "content-length", "host"}
 
@@ -88,7 +91,8 @@ class H(BaseHTTPRequestHandler):
         if "X-Forwarded-For" not in self.headers and "X-Real-IP" not in self.headers:
             hdr["X-Forwarded-For"] = hdr["X-Real-IP"] = self.client_address[0]
         idx = self.command == "GET" and self.path.split("?")[0] in ("/_admin", "/_admin/", "/_admin/index.html")
-        if idx:  # we rewrite the admin index: ask upstream for a plain, uncached copy
+        ent = self.command == "GET" and self.path.split("?")[0].startswith("/_admin/static/entry/index-") and self.path.split("?")[0].endswith(".js")
+        if idx or ent:  # we rewrite the admin index: ask upstream for a plain, uncached copy
             for k in list(hdr):
                 if k.lower() in ("accept-encoding", "if-none-match", "if-modified-since"):
                     del hdr[k]
@@ -129,6 +133,10 @@ class H(BaseHTTPRequestHandler):
             data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=3">'
                                 b'<script src="/_admin/adoluna-peerui.js?v=3" defer></script></head>', 1)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
+        if ent and r.status == 200 and PEERUI:  # admin build hides these menus; admins need Users (email, reset password)
+            for a, b in UNHIDE:
+                data = data.replace(a, b)
+            extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-cache")]
         self.send(r.status, data, r.getheader("Content-Type", "application/octet-stream"), extra)
 
     def add_pw(self, req, data):
