@@ -161,7 +161,7 @@ function myMount(main){MY.q="";MY.sel=new Set();const R=document.createElement("
  R.querySelector("#adp-all").onclick=e=>{myRows().forEach(p=>e.target.checked?MY.sel.add(p.row_id):MY.sel.delete(p.row_id));myRender()};
  Promise.all([api("/my/peer/list"+PS),api("/my/address_book_collection/list"+PS).catch(()=>({list:[]}))]).then(([a,b])=>{MY.list=a.list||[];MY.cols=b.list||[];myRender()}).catch(e=>{R.querySelector("#adp-tb").innerHTML='<tr><td colspan=6 style="color:#C62828">'+T("读取失败：","Failed to load: ")+esc(e.message)+'</td></tr>'})}
 /* ---- tables (batch 2): compact action buttons, icons + tooltip when they don't fit, hide Web Client buttons ---- */
-const ICO={"Edit":"✎","编辑":"✎","Delete":"🗑","删除":"🗑","Link":"🔗","连接":"🔗","Share Rules":"⇄","共享规则":"⇄","UserTags":"🏷","User Tags":"🏷","用户标签":"🏷","User Address Book":"📒","用户地址簿":"📒","Reset password":"↺","Disable":"⏸","Enable":"▶","禁用":"⏸","启用":"▶"};
+const ICO={"Edit":"✎","编辑":"✎","Delete":"🗑","删除":"🗑","Link":"🔗","连接":"🔗","Share Rules":"⇄","共享规则":"⇄","UserTags":"🏷","User Tags":"🏷","用户标签":"🏷","User Address Book":"📒","用户地址簿":"📒","Reset password":"🔑","Reset Password":"🔑","重设密码":"🔑","重置密码":"🔑","Disable":"⏸","Enable":"▶","禁用":"⏸","启用":"▶"};
 function tables(){document.querySelectorAll(".app-main .el-table__cell .cell .el-button").forEach(b=>{if(b.dataset.adpT)return;const t=b.textContent.trim();b.dataset.adpT=t;b.title=t;
   if(/^(Web Client|Share By Web Client|Web客户端|通过Web客户端分享|Web 客户端)$/i.test(t)||/web\s*client|web客户端/i.test(t))b.classList.add("adp-hidden");
   const s=b.querySelector("span");if(s&&!s.querySelector(".adp-i"))s.insertAdjacentHTML("afterbegin",'<i class="adp-i">'+(ICO[t]||t.charAt(0))+'</i>')});
