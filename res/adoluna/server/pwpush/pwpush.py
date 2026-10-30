@@ -161,7 +161,7 @@ class H(BaseHTTPRequestHandler):
                 if bad:
                     return self.send(200, json.dumps({"code": 101, "message": bad, "data": None}, ensure_ascii=False).encode())
                 cur = ACC.uid_for_token(self.headers.get("api-token"))
-            if path0 in AB_WRITE and self.command == "POST":
+            if path0 in AB_WRITE and self.command == "POST" and ACC.uid_for_token(self.headers.get("api-token")):
                 bad = ab_id_problem(path0, body, not str(self.headers.get("Accept-Language", "zh")).lower().startswith("en"))
                 if bad:
                     return self.send(200, json.dumps({"code": 101, "message": bad, "data": None}, ensure_ascii=False).encode())
