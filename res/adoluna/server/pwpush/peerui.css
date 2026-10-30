@@ -69,3 +69,20 @@
 #adp .card{overflow-x:auto}
 #adp-acl .adp-ck{display:flex;gap:8px;align-items:center;margin:4px 0;cursor:pointer}.adp-gr{padding:3px 0}.adp-gr a,#adp-al{color:#C62828;margin-left:6px}
 .adp-at{width:100%;border-collapse:collapse;font-size:12px}.adp-at td,.adp-at th{border-bottom:1px solid #eee;padding:4px 6px;text-align:left}
+/* 20261030 batch 4: password push page + per-device passwords */
+#adp .adp-pwh h3{margin:0 0 6px;font-size:16px}#adp .adp-pwh .adp-hint{font-size:13px;line-height:1.6;max-width:900px}
+#adp .adp-sum{margin-top:14px;display:grid;gap:8px;border:1px solid var(--bl);border-radius:8px;padding:12px 16px;background:#FAFAFB}
+.adp-kv{display:grid;grid-template-columns:96px 1fr;gap:12px;align-items:center}.adp-kv>span:first-child{color:#6B7280}.adp-kv>span.adp-hint{grid-column:2}
+.adp-kv>b+span.adp-hint{grid-column:auto}.adp-kv:first-child{grid-template-columns:96px auto 1fr}
+.adp-cust{font-size:12px;padding:2px 8px;border-radius:4px;background:#FFF1EC;color:#C2410C;white-space:nowrap}
+#adp th.act,#adp td.act{text-align:right;white-space:nowrap;width:1%}#adp .btn.sm{height:24px;padding:0 8px;font-size:12px;border-radius:4px}
+#adp td .adp-tag,#adp td .adp-chip,#adp td .adp-amb{white-space:nowrap}
+.adp-dlg.xl{width:860px;max-width:94vw;top:6%;max-height:88vh;overflow:auto}
+.adp-allck{display:flex!important;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #F0F1F3;margin-bottom:10px}.adp-allck input,.adp-tgc .adp-ck input,.adp-pi.ck input{width:auto!important;height:auto!important;margin:0!important}
+.adp-tgs{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px}.adp-tgs.off{opacity:.4;pointer-events:none}.adp-tgc h5{margin:0 0 6px;font-size:13px;color:#374151}
+.adp-tgc.wide{grid-column:1/-1}.adp-tgc .adp-ck{display:flex;gap:6px;align-items:center;padding:3px 0;cursor:pointer}
+.adp-pi.ck{grid-template-columns:20px 110px 1fr 150px 110px}.adp-tgc .adp-pl{max-height:240px}
+.adp-tot{margin-top:12px;padding:10px 12px;background:#F6F7F9;border-radius:6px}
+#adp-pw a{color:#C62828}
+#adp-au{overflow-x:auto}.adp-at td:last-child{min-width:140px}.adp-at td{white-space:nowrap}.adp-at td:last-child{white-space:normal}
+#adp .adp-at td,#adp .adp-at th{padding:4px 6px;font-size:12px}

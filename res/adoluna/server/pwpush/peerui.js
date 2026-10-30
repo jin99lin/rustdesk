@@ -30,29 +30,37 @@ function rows(){const q=S.q.toLowerCase(),u=S.u.toLowerCase();return S.list.filt
 function renderList(){const r=rows();root.querySelector("#adp-tb").innerHTML=r.map(p=>'<tr class="r" data-id="'+esc(p.row_id)+'"><td class="adp-mono">'+esc(p.id)+'</td><td>'+esc(p.alias||p.hostname)+'</td><td>'+esc(osName(p.os))+'</td><td>'+stHtml(p)+'</td><td>'+esc(p.username||"—")+'</td></tr>').join("")||'<tr><td colspan=5 style="text-align:center;color:#6B7280">'+T("没有设备","No devices")+'</td></tr>';
  root.querySelector("#adp-n").textContent=T("共 "+r.length+" 台",r.length+(r.length===1?" device":" devices"));root.querySelectorAll("tr.r").forEach(t=>t.onclick=()=>openD(S.list.find(p=>String(p.row_id)===t.dataset.id)))}
 function pwBox(p){const s=S.pw;if(!s)return'<span class="adp-hint">'+T("无法读取推送状态（需在内网用管理员登录）","Can't read push status (sign in as admin on the internal network)")+'</span>';
- const inAll=!s.targets.length,inT=inAll||s.targets.includes(String(p.id));
- return T('后台当前密码版本：','Current password version: ')+'<b>v'+esc(s.version||0)+'</b>　<span class="adp-hint">'+esc(s.updated_at||T("还没有设置过","Never set"))+'</span><br>'+T('这台设备：','This device: ')+(inT?'<span class="adp-tag">'+(inAll?T('已在推送范围（全部设备）','In push scope (all devices)'):T('已在推送范围','In push scope'))+'</span>':'<span class="adp-tag i">'+T('不在推送范围','Not in push scope')+'</span>')+
- '<br><span class="adp-hint">'+T('「重置密码」会把后台当前的固定密码推送到这台设备（需 76 版及以后）。','"Reset password" pushes the current permanent password to this device (build 76 or later).')+'</span>'}
+ const id=String(p.id),c=(s.custom||{})[id],x=(s.devices||{})[id];
+ const src=c?'<span class="adp-cust">🔒 '+T("单独密码","Own password")+' v'+esc(c.v)+'</span>　<span class="adp-hint">'+esc(c.at||"")+'</span>　<a href="#" id="adp-pwclr">'+T("改回批量密码","Use batch password")+'</a>'
+  :(x?'<span class="adp-tag">'+T("批量密码","Batch password")+' v'+esc(s.version||0)+'</span>':'<span class="adp-tag i">'+T("不在批量推送对象里","Not in batch targets")+'</span>');
+ return T('这台设备：','This device: ')+src+'<br>'+T('推送状态：','Push status: ')+pwState(p,x)+
+ '<br><span class="adp-hint">'+(c?T('批量推送会跳过这台设备。','Batch pushes skip this device.'):T('「重置密码」可以给这台设备单独设一个密码，以后批量推送会跳过它。','"Reset password" gives this device its own password; batch pushes then skip it.'))+'</span>'}
+/* bilingual names like "测试设备 / Test Devices": show only the current language (Jay 10/30) */
+const LN=n=>{n=String(n==null?"":n);const m=n.split(/\s+\/\s+/);if(m.length!==2)return n;const cj=/[\u3400-\u9fff]/;const[z,e]=cj.test(m[0])&&!cj.test(m[1])?m:cj.test(m[1])&&!cj.test(m[0])?[m[1],m[0]]:[null,null];return z===null?n:T(z,e)};
+const AUD={"签发":["签发","Ticket issued"],"账号不可用":["账号不可用","Account disabled"],"目标设备为仅控制端":["目标设备为仅控制端","Target is controller-only"],"目标设备未开启账号免密登录":["目标设备未开启账号免密登录","Passwordless is off on the target"],"未知设备":["未知设备","Unknown device"],"未授权该设备":["未授权该设备","Not authorized for this device"]};
+function audR(r){r=String(r||"");let m;if(AUD[r])return T(...AUD[r]);if((m=r.match(/^拒绝: (.*)$/)))return T("拒绝：","Denied: ")+(AUD[m[1]]?T(...AUD[m[1]]):m[1]);
+ if((m=r.match(/^设置角色 免密=(\d) 仅控制端=(\d)$/)))return T(r,"Role set: passwordless="+m[1]+", controller-only="+m[2]);if((m=r.match(/^删除授权 (.*)$/)))return T(r,"Grant removed "+m[1]);if((m=r.match(/^添加授权 (.*)$/)))return T(r,"Grant added "+m[1]);return r}
 function aclU(id){const u=S.acl&&S.acl.users.find(x=>String(x.id)===String(id));return u?(u.nickname||u.username):"#"+id}
-function aclG(id,dg){const l=S.acl?(dg?S.acl.device_groups:S.acl.groups):[];const g=l.find(x=>String(x.id)===String(id));return g?g.name:"#"+id}
-function aclBox(p){const a=S.acl;if(!a)return'<span class="adp-hint">无法读取免密设置（需在内网用管理员登录）</span>';
+function aclG(id,dg){const l=S.acl?(dg?S.acl.device_groups:S.acl.groups):[];const g=l.find(x=>String(x.id)===String(id));return g?LN(g.name):"#"+id}
+const SUBJ=k=>k==="user"?T("员工","Staff"):T("用户组","User group");
+function aclBox(p){const a=S.acl;if(!a)return'<span class="adp-hint">'+T("无法读取免密设置（需在内网用管理员登录）","Can't read passwordless settings (sign in as admin on the internal network)")+'</span>';
  const r=a.roles.find(x=>x.peer_id===String(p.id))||{accept:0,ctrl_only:0};
  const gs=a.grants.filter(g=>(g.tgt_kind==="peer"&&g.tgt===String(p.id))||(g.tgt_kind==="dgroup"&&String(p.group_id)===g.tgt));
- return'<label class="adp-ck"><input type="checkbox" id="adp-acc"'+(r.accept?" checked":"")+'> 允许已授权的员工账号免密码连接这台设备</label>'+
- '<label class="adp-ck"><input type="checkbox" id="adp-co"'+(r.ctrl_only?" checked":"")+'> 仅控制端（拒绝所有连入，适用于员工电脑）</label>'+
- '<div style="margin:10px 0 4px"><b>已授权</b></div>'+(gs.length?gs.map(g=>'<div class="adp-gr">'+(g.subj_kind==="user"?"员工 ":"用户组 ")+esc(g.subj_kind==="user"?aclU(g.subj):aclG(g.subj))+
- (g.tgt_kind==="dgroup"?' <span class="adp-hint">（通过设备分组「'+esc(aclG(g.tgt,1))+'」）</span>':'')+' <a href="#" data-gdel="'+g.id+'">移除</a></div>').join(""):'<div class="adp-hint">还没有授权任何员工</div>')+
- '<div style="margin-top:8px;display:flex;gap:6px"><select id="adp-gs">'+a.users.filter(u=>u.status===1).map(u=>'<option value="user:'+u.id+'">员工 '+esc(u.nickname||u.username)+'</option>').join("")+
- a.groups.map(g=>'<option value="group:'+g.id+'">用户组 '+esc(g.name)+'</option>').join("")+'</select><button class="btn" id="adp-ga">授权</button></div>'+
- '<div style="margin:12px 0 4px"><b>最近免密记录</b> <a href="#" id="adp-al">查看</a></div><div id="adp-au"></div>'}
-async function auditHtml(q){const d=await api(ACL+"audit?limit=200"+(q||""));return d.items.length?'<table class="adp-at"><tr><th>时间</th><th>账号</th><th>控制端 ID</th><th>设备 ID</th><th>IP</th><th>结果</th></tr>'+
- d.items.map(i=>'<tr><td>'+esc(fmtET(i.ts))+'</td><td>'+esc(i.user)+'</td><td class="adp-mono">'+esc(i.my_id)+'</td><td class="adp-mono">'+esc(i.peer_id)+'</td><td>'+esc(i.ip)+'</td><td>'+esc(i.result)+'</td></tr>').join("")+'</table>':'<span class="adp-hint">没有记录</span>'}
+ return'<label class="adp-ck"><input type="checkbox" id="adp-acc"'+(r.accept?" checked":"")+'> '+T("允许已授权的员工账号免密码连接这台设备","Let authorized staff accounts connect to this device without a password")+'</label>'+
+ '<label class="adp-ck"><input type="checkbox" id="adp-co"'+(r.ctrl_only?" checked":"")+'> '+T("仅控制端（拒绝所有连入，适用于员工电脑）","Controller only (refuse all incoming connections; for staff computers)")+'</label>'+
+ '<div style="margin:10px 0 4px"><b>'+T("已授权","Authorized")+'</b></div>'+(gs.length?gs.map(g=>'<div class="adp-gr">'+SUBJ(g.subj_kind)+' '+esc(g.subj_kind==="user"?aclU(g.subj):aclG(g.subj))+
+ (g.tgt_kind==="dgroup"?' <span class="adp-hint">'+T("（通过设备分组「"+esc(aclG(g.tgt,1))+"」）","(via device group \""+esc(aclG(g.tgt,1))+"\")")+'</span>':'')+' <a href="#" data-gdel="'+g.id+'">'+T("移除","Remove")+'</a></div>').join(""):'<div class="adp-hint">'+T("还没有授权任何员工","No staff authorized yet")+'</div>')+
+ '<div style="margin-top:8px;display:flex;gap:6px"><select id="adp-gs">'+a.users.filter(u=>u.status===1).map(u=>'<option value="user:'+u.id+'">'+SUBJ("user")+' '+esc(u.nickname||u.username)+'</option>').join("")+
+ a.groups.map(g=>'<option value="group:'+g.id+'">'+SUBJ("group")+' '+esc(LN(g.name))+'</option>').join("")+'</select><button class="btn" id="adp-ga">'+T("授权","Authorize")+'</button></div>'+
+ '<div style="margin:12px 0 4px"><b>'+T("最近免密记录","Recent passwordless activity")+'</b> <a href="#" id="adp-al">'+T("查看","View")+'</a></div><div id="adp-au"></div>'}
+async function auditHtml(q){const d=await api(ACL+"audit?limit=200"+(q||""));return d.items.length?'<table class="adp-at"><tr><th>'+T("时间","Time")+'</th><th>'+T("账号","Account")+'</th><th>'+T("控制端 ID","Controller ID")+'</th><th>'+T("设备 ID","Device ID")+'</th><th>IP</th><th>'+T("结果","Result")+'</th></tr>'+
+ d.items.map(i=>'<tr><td>'+esc(fmtET(i.ts))+'</td><td>'+esc(i.user==="(后台)"?T("(后台)","(admin)"):i.user)+'</td><td class="adp-mono">'+esc(i.my_id)+'</td><td class="adp-mono">'+esc(i.peer_id)+'</td><td>'+esc(i.ip)+'</td><td>'+esc(audR(i.result))+'</td></tr>').join("")+'</table>':'<span class="adp-hint">'+T("没有记录","No records")+'</span>'}
 function wireAcl(w,p){const box=w.querySelector("#adp-acl");if(!S.acl)return;
- const role=async()=>{try{await api(ACL+"role",{peer_id:String(p.id),accept:box.querySelector("#adp-acc").checked?1:0,ctrl_only:box.querySelector("#adp-co").checked?1:0});S.acl=await api(ACL+"acl");toast("已保存，设备下次心跳（约 15 秒）生效")}catch(e){toast("保存失败："+e.message,1)}};
+ const role=async()=>{try{await api(ACL+"role",{peer_id:String(p.id),accept:box.querySelector("#adp-acc").checked?1:0,ctrl_only:box.querySelector("#adp-co").checked?1:0});S.acl=await api(ACL+"acl");toast(T("已保存，设备下次心跳（约 15 秒）生效","Saved. Takes effect on the device's next heartbeat (about 15 seconds)"))}catch(e){toast(T("保存失败：","Save failed: ")+e.message,1)}};
  box.querySelector("#adp-acc").onchange=role;box.querySelector("#adp-co").onchange=role;
  const re=async()=>{S.acl=await api(ACL+"acl");box.innerHTML=aclBox(p);wireAcl(w,p)};
- box.querySelector("#adp-ga").onclick=async()=>{const [k,v]=box.querySelector("#adp-gs").value.split(":");try{await api(ACL+"grant",{subj_kind:k,subj:v,tgt_kind:"peer",tgt:String(p.id)});toast("已授权");re()}catch(e){toast("失败："+e.message,1)}};
- box.querySelectorAll("[data-gdel]").forEach(a=>a.onclick=async e=>{e.preventDefault();try{await api(ACL+"grant",{delete:Number(a.dataset.gdel)});toast("已移除");re()}catch(x){toast("失败："+x.message,1)}});
+ box.querySelector("#adp-ga").onclick=async()=>{const [k,v]=box.querySelector("#adp-gs").value.split(":");try{await api(ACL+"grant",{subj_kind:k,subj:v,tgt_kind:"peer",tgt:String(p.id)});toast(T("已授权","Authorized"));re()}catch(e){toast(T("失败：","Failed: ")+e.message,1)}};
+ box.querySelectorAll("[data-gdel]").forEach(a=>a.onclick=async e=>{e.preventDefault();try{await api(ACL+"grant",{delete:Number(a.dataset.gdel)});toast(T("已移除","Removed"));re()}catch(x){toast(T("失败：","Failed: ")+x.message,1)}});
  box.querySelector("#adp-al").onclick=async e=>{e.preventDefault();box.querySelector("#adp-au").innerHTML=await auditHtml("&peer_id="+encodeURIComponent(p.id))}}
 function sel(name,cur,opts){return'<select data-k="'+name+'"><option value="0">—</option>'+opts.map(o=>'<option value="'+o.id+'"'+(Number(cur)===Number(o.id)?" selected":"")+'>'+esc(o.n)+'</option>').join("")+'</select>'}
 function openD(p){if(!p)return;const w=document.createElement("div");w.id="adp-d";
@@ -61,7 +69,7 @@ function openD(p){if(!p)return;const w=document.createElement("div");w.id="adp-d
  w.innerHTML='<div class="mask"></div><div class="drw"><div class="dh"><h2><span><span class="adp-mono">'+esc(p.id)+'</span> · '+esc(p.alias||p.hostname)+'</span><span class="x">✕</span></h2><div class="sub">'+stHtml(p)+' · '+esc(osName(p.os))+'</div></div>'+
  '<div class="db"><div class="sec"><h3>'+T('基本信息','Basic info')+'</h3><div class="f">'+inp("hostname",T("主机名","Hostname"))+inp("username",T("用户名","Username"))+inp("alias",T("别名","Alias"))+
  '<label>'+T('所属用户','Owner')+'</label>'+(S.users.length?sel("user_id",p.user_id,S.users.map(u=>({id:u.id,n:u.nickname||u.username}))):'<input data-k="user_id" value="'+esc(p.user_id)+'">')+
- '<label>'+T('分组','Group')+'</label>'+(S.groups.length?sel("group_id",p.group_id,S.groups.map(g=>({id:g.id,n:g.name}))):'<input data-k="group_id" value="'+esc(p.group_id)+'">')+'</div></div>'+
+ '<label>'+T('分组','Group')+'</label>'+(S.groups.length?sel("group_id",p.group_id,S.groups.map(g=>({id:g.id,n:LN(g.name)}))):'<input data-k="group_id" value="'+esc(p.group_id)+'">')+'</div></div>'+
  '<div class="sec"><h3>'+T('设备信息','Device info')+'</h3><div class="f">'+ro(T("设备 ID","Device ID"),p.id)+ro(T("系统","OS"),p.os)+ro(T("处理器","CPU"),p.cpu)+ro(T("内存","Memory"),p.memory)+ro(T("最后 IP","Last IP"),p.last_online_ip)+ro(T("客户端版本","Client version"),p.version)+ro("UUID",p.uuid)+ro(T("最后在线","Last online"),fmtET(p.last_online_time))+'</div></div>'+
  '<div class="sec"><h3>'+T('免密登录','Passwordless')+'</h3><div class="pc" id="adp-acl">'+aclBox(p)+'</div></div><div class="sec"><h3>'+T('固定密码','Permanent password')+'</h3><div class="pc" id="adp-pw">'+pwBox(p)+'</div></div></div>'+
  '<div class="df"><button class="btn del" data-a="del">'+T('删除','Delete')+'</button><span style="flex:1"></span><button class="btn rr" data-a="pw">'+T('重置密码','Reset password')+'</button><a class="btn" data-a="link" href="adolunasupport://'+encodeURIComponent(p.id)+'" style="display:inline-flex;align-items:center;text-decoration:none">'+T('远程连接','Connect')+'</a><button class="btn" data-a="fav">'+T('☆ 收藏','☆ Favorite')+'</button><button class="btn pri" data-a="save">'+T('保存修改','Save')+'</button></div></div>';
@@ -70,19 +78,19 @@ function openD(p){if(!p)return;const w=document.createElement("div");w.id="adp-d
  A("save").onclick=async()=>{const b={};["row_id","id","cpu","hostname","memory","os","username","uuid","version","user_id","group_id","alias"].forEach(k=>b[k]=p[k]);
   w.querySelectorAll("[data-k]").forEach(e=>{const k=e.dataset.k;b[k]=(k==="user_id"||k==="group_id")?Number(e.value)||0:e.value.trim()});
   try{await api("/peer/update",b);toast(T("已保存","Saved"));Object.assign(p,b);close();renderList()}catch(e){toast(T("保存失败：","Save failed: ")+e.message,1)}};
- A("pw").onclick=()=>dialog('<h4>'+T('重置密码','Reset password')+'</h4><div style="line-height:1.7">'+T('把后台当前的固定密码（v'+esc(S.pw?S.pw.version:"?")+'）推送到设备 <b class="adp-mono">'+esc(p.id)+'</b>（'+esc(p.alias||p.hostname)+'）？','Push the current permanent password (v'+esc(S.pw?S.pw.version:"?")+') to device <b class="adp-mono">'+esc(p.id)+'</b> ('+esc(p.alias||p.hostname)+')?')+'</div><div class="adp-hint" style="margin-top:8px">'+T('在线设备约 15 秒内生效；离线设备下次上线时生效。','Online devices update in about 15 seconds; offline devices update next time they come online.')+'</div>',
-  async()=>{const r=await api("/_admin/adoluna-api/reset",{id:String(p.id)});S.pw=r;w.querySelector("#adp-pw").innerHTML=pwBox(p);toast(EN()?"Added to push scope":(r.note||"已加入推送范围"))},T("推送密码","Push password"));
+ const pwRe=()=>{const b=w.querySelector("#adp-pw");b.innerHTML=pwBox(p);const l=b.querySelector("#adp-pwclr");if(l)l.onclick=e=>{e.preventDefault();pwClear(String(p.id),pwRe)}};pwRe();
+ A("pw").onclick=()=>ownPwDialog(p.id,p.alias||p.hostname,pwRe);
  A("fav").onclick=async()=>{try{await api("/address_book/create",{id:p.id,hostname:p.hostname,username:p.username,alias:p.alias,platform:osName(p.os),user_id:p.user_id||0,tags:[]});toast(T("已收藏到地址簿","Added to address book"))}catch(e){toast(T("收藏失败：","Favorite failed: ")+e.message,1)}};
  A("del").onclick=()=>dialog('<h4>'+T('删除设备','Delete device')+'</h4><div style="line-height:1.7">'+T('确定从后台删除设备 <b class="adp-mono">'+esc(p.id)+'</b>（'+esc(p.hostname)+'）？','Delete device <b class="adp-mono">'+esc(p.id)+'</b> ('+esc(p.hostname)+') from the admin?')+'<br><span class="adp-hint">'+T('请输入设备 ID 以确认。设备下次上线会重新出现在列表。','Type the device ID to confirm. The device reappears in the list next time it comes online.')+'</span></div>',
   async()=>{await api("/peer/delete",{row_id:p.row_id});toast(T("已删除","Deleted"));close();S.list=S.list.filter(x=>x!==p);renderList()},T("删除","Delete"),String(p.id))}
 const isPeerPage=()=>/\/user\/peer(\?|$)/.test(location.hash||"")||/\/user\/peer\/?$/.test(location.pathname);
 const abView=()=>{const h=location.hash||"";return /^#\/user\/addressBook(\?|$)/.test(h)?"absys":/^#\/my\/address_book(\?|$)/.test(h)?"abmy":null};
-const curView=()=>isPeerPage()?"peer":/^#\/(\?.*)?$/.test(location.hash||"")?"mypeer":abView();
+const curView=()=>isPwPage()?"pw":isPeerPage()?"peer":/^#\/(\?.*)?$/.test(location.hash||"")?"mypeer":abView();
 const deb=(f,ms)=>{let k=0;return(...a)=>{clearTimeout(k);k=setTimeout(()=>f(...a),ms||300)}};
-function mount(){const main=document.querySelector(".app-main")||document.querySelector(".el-main");if(!main)return;const v=curView();
+function mount(){const main=document.querySelector(".app-main")||document.querySelector(".el-main");if(!main)return;const v=curView();if(v!=="pw"){const mi=document.getElementById("adp-menu");if(mi)mi.classList.remove("is-active")}
  const o=document.getElementById("adp");if(o&&o.dataset.v!==v){o.remove();[...main.children].forEach(c=>c.classList.remove("adp-hidden"))}
  if(!v)return;[...main.children].forEach(c=>{if(c.id!=="adp")c.classList.add("adp-hidden")});if(document.getElementById("adp"))return;
- if(v==="mypeer")return myMount(main);if(v!=="peer")return abMount(main,v);
+ if(v==="pw")return pwMount(main);if(v==="mypeer")return myMount(main);if(v!=="peer")return abMount(main,v);
  root=document.createElement("div");root.id="adp";root.dataset.v="peer";root.innerHTML='<div class="card"><div class="bar"><input id="adp-q" placeholder="'+T('设备 ID / 主机名','Device ID / hostname')+'" style="width:200px"><input id="adp-u" placeholder="'+T('用户名','Username')+'" style="width:150px"><button class="btn txt" id="adp-r">'+T('重置','Reset')+'</button></div><table><thead><tr><th>'+T('设备 ID','Device ID')+'</th><th>'+T('主机名','Hostname')+'</th><th>'+T('系统','OS')+'</th><th>'+T('状态','Status')+'</th><th>'+T('用户名','Username')+'</th></tr></thead><tbody id="adp-tb"><tr><td colspan=5>'+T('读取中…','Loading…')+'</td></tr></tbody></table><div id="adp-n" style="margin-top:14px;color:#6B7280;font-size:13px"></div></div>';
  main.appendChild(root);const q=root.querySelector("#adp-q"),u=root.querySelector("#adp-u");
  const go=deb(()=>{S.q=q.value.trim();S.u=u.value.trim();renderList()},250);q.oninput=u.oninput=go;
@@ -95,7 +103,7 @@ const abA=v=>v==="absys"?{list:"/address_book/list",create:"/address_book/create
  :{list:"/my/address_book/list",create:"/my/address_book/create",update:"/my/address_book/update",del:"/my/address_book/delete",cols:"/my/address_book_collection/list",tags:"/my/tag/list"};
 const DEF_AB=()=>T("我的地址簿","My Address Book");
 const tagsOf=e=>Array.isArray(e.tags)?e.tags:(()=>{try{return JSON.parse(e.tags||"[]")||[]}catch(x){return[]}})();
-const colName=e=>{const c=Number(e.collection_id)||0;if(!c)return DEF_AB();if(e.collection&&e.collection.name)return e.collection.name;const x=AB.cols.find(k=>Number(k.id)===c);return x?x.name:"#"+c};
+const colName=e=>{const c=Number(e.collection_id)||0;if(!c)return DEF_AB();if(e.collection&&e.collection.name)return LN(e.collection.name);const x=AB.cols.find(k=>Number(k.id)===c);return x?LN(x.name):"#"+c};
 const uName=id=>{const u=AB.users.find(x=>Number(x.id)===Number(id));return u?(u.nickname||u.username):(AB.me&&Number(AB.me.id)===Number(id)?AB.me.username:"#"+id)};
 const devName=d=>d?(d.alias||d.hostname||""):"";
 async function abLoad(){const A=abA(AB.v),E={list:[]};
@@ -116,7 +124,7 @@ function abRender(){const R=document.getElementById("adp");if(!R)return;const r=
  R.querySelector("#adp-n").textContent=T("共 "+r.length+" 台",r.length+(r.length===1?" device":" devices"));
  R.querySelectorAll("tr.r").forEach(t=>t.onclick=()=>abDrawer(AB.list.find(e=>String(e.row_id)===t.dataset.r)))}
 function colOpts(uid,cur,withAll){const own=AB.cols.filter(c=>AB.v!=="absys"||uid==null||Number(c.user_id)===Number(uid));
- return(withAll?'<option value="">'+T("全部地址簿","All address books")+'</option>':'')+'<option value="0"'+(String(cur)==="0"?" selected":"")+'>'+esc(DEF_AB())+'</option>'+own.map(c=>'<option value="'+c.id+'"'+(String(cur)===String(c.id)?" selected":"")+'>'+esc(c.name)+(AB.v==="absys"&&uid==null?' ('+esc(uName(c.user_id))+')':'')+'</option>').join("")}
+ return(withAll?'<option value="">'+T("全部地址簿","All address books")+'</option>':'')+'<option value="0"'+(String(cur)==="0"?" selected":"")+'>'+esc(DEF_AB())+'</option>'+own.map(c=>'<option value="'+c.id+'"'+(String(cur)===String(c.id)?" selected":"")+'>'+esc(LN(c.name))+(AB.v==="absys"&&uid==null?' ('+esc(uName(c.user_id))+')':'')+'</option>').join("")}
 function abMount(main,v){AB.v=v;AB.q=AB.c=AB.o="";const R=document.createElement("div");R.id="adp";R.dataset.v=v;const sys=v==="absys";
  R.innerHTML='<div class="card"><div class="bar"><input id="adp-q" placeholder="'+T("搜索设备 ID / 名称 / 门店 / 标签","Search ID / name / store / tag")+'" style="width:280px">'+
  '<select id="adp-c"></select>'+(sys?'<select id="adp-o"><option value="">'+T("全部所属用户","All owners")+'</option></select>':'')+'<button class="btn txt" id="adp-r">'+T("重置","Reset")+'</button><span style="flex:1"></span><span id="adp-n" class="adp-hint"></span><button class="btn pri" id="adp-add">'+T("+ 添加设备","+ Add device")+'</button></div>'+
@@ -133,7 +141,7 @@ function abDrawer(e){if(!e)return;const R=document.getElementById("adp");const d
  w.innerHTML='<div class="mask"></div><div class="drw"><div class="dh"><h2><span><span class="adp-mono">'+esc(e.id)+'</span> · '+esc(e.alias||e.hostname||devName(d))+'</span><span class="x">✕</span></h2><div class="sub">'+abStatus(e)+(d?' · '+esc(osName(d.os)):'')+'</div></div>'+
  '<div class="db"><div class="sec"><h3>'+T("地址簿信息","Address book entry")+'</h3><div class="f"><label>'+T("别名","Alias")+'</label><input data-k="alias" value="'+esc(e.alias)+'" placeholder="'+esc(devName(d))+'">'+
  '<label>'+T("地址簿","Address book")+'</label><select data-k="collection_id">'+colOpts(e.user_id,Number(e.collection_id||0),false)+'</select><label>'+T("标签","Tags")+'</label><div id="adp-tags">'+tagBox(e,e.collection_id||0,e.user_id)+'</div>'+(sys?ro(T("所属用户","Owner"),uName(e.user_id)):'')+'</div></div>'+
- '<div class="sec"><h3>'+T("设备信息","Device info")+'</h3><div class="f">'+ro(T("设备 ID","Device ID"),e.id)+ro(T("主机名","Hostname"),d?d.hostname:e.hostname)+ro(T("门店","Store"),d&&d.group)+ro(T("系统","OS"),d?d.os:e.platform)+ro(T("最后在线","Last online"),d?fmtET(d.last_online_time):"")+'</div>'+(d?'':'<div class="adp-hint" style="margin-top:10px">'+T("这个 ID 不在系统设备列表里（可能是旧记录）。","This ID isn't in the device list (probably an old entry).")+'</div>')+'</div></div>'+
+ '<div class="sec"><h3>'+T("设备信息","Device info")+'</h3><div class="f">'+ro(T("设备 ID","Device ID"),e.id)+ro(T("主机名","Hostname"),d?d.hostname:e.hostname)+ro(T("门店","Store"),d&&LN(d.group))+ro(T("系统","OS"),d?d.os:e.platform)+ro(T("最后在线","Last online"),d?fmtET(d.last_online_time):"")+'</div>'+(d?'':'<div class="adp-hint" style="margin-top:10px">'+T("这个 ID 不在系统设备列表里（可能是旧记录）。","This ID isn't in the device list (probably an old entry).")+'</div>')+'</div></div>'+
  '<div class="df"><button class="btn del" data-a="del">'+T("从地址簿移除","Remove")+'</button><span style="flex:1"></span><a class="btn" href="adolunasupport://'+encodeURIComponent(e.id)+'" style="display:inline-flex;align-items:center;text-decoration:none">'+T("远程连接","Connect")+'</a><button class="btn pri" data-a="save">'+T("保存修改","Save")+'</button></div></div>';
  R.appendChild(w);const close=()=>w.remove();w.querySelector(".mask").onclick=close;w.querySelector(".x").onclick=close;const cs=w.querySelector('[data-k="collection_id"]');
  cs.onchange=()=>{w.querySelector("#adp-tags").innerHTML=tagBox({tags:[]},cs.value,e.user_id)};
@@ -146,7 +154,7 @@ function devSearch(q){const L=AB.devs.filter(d=>!q||qMatch(q,hay([d.id,d.hostnam
  const ql=q.trim().toLowerCase();return L.sort((a,b)=>((ql&&b.id.startsWith(ql))-(ql&&a.id.startsWith(ql)))||(isOn(b)-isOn(a))||(b.last_online_time-a.last_online_time)).slice(0,15)}
 function picker(box,onPick){box.innerHTML='<input class="adp-pq" placeholder="'+T("输入设备 ID、名称、门店或标签搜索","Search by device ID, name, store or tag")+'" autocomplete="off"><div class="adp-pl"></div>';
  const i=box.querySelector("input"),l=box.querySelector(".adp-pl");
- const show=()=>{const r=devSearch(i.value);l.innerHTML=r.map(d=>'<div class="adp-pi" data-id="'+esc(d.id)+'"><span class="adp-mono">'+esc(d.id)+'</span><span class="n">'+esc(devName(d)||"—")+'</span><span class="g">'+esc(d.group||T("未分组","No store"))+'</span><span class="s">'+stHtml(d)+'</span></div>').join("")||'<div class="adp-hint" style="padding:10px">'+(AB.devs.length?T("没有匹配的设备","No matching devices"):T("读不到设备列表","Couldn't load the device list"))+'</div>';
+ const show=()=>{const r=devSearch(i.value);l.innerHTML=r.map(d=>'<div class="adp-pi" data-id="'+esc(d.id)+'"><span class="adp-mono">'+esc(d.id)+'</span><span class="n">'+esc(devName(d)||"—")+'</span><span class="g">'+esc(LN(d.group)||T("未分组","No store"))+'</span><span class="s">'+stHtml(d)+'</span></div>').join("")||'<div class="adp-hint" style="padding:10px">'+(AB.devs.length?T("没有匹配的设备","No matching devices"):T("读不到设备列表","Couldn't load the device list"))+'</div>';
   l.querySelectorAll(".adp-pi").forEach(x=>x.onclick=()=>{l.querySelectorAll(".adp-pi").forEach(y=>y.classList.remove("on"));x.classList.add("on");onPick(AB.dmap[x.dataset.id])})};
  i.oninput=deb(show,150);show();setTimeout(()=>i.focus(),30)}
 function abAdd(){const sys=AB.v==="absys",me=AB.me||{};let pick=null;
@@ -157,7 +165,7 @@ function abAdd(){const sys=AB.v==="absys",me=AB.me||{};let pick=null;
    await api(abA(AB.v).create,b);toast(T("已添加","Added"));await abLoad();abRender()},T("添加","Add"));
  const dl=[...document.querySelectorAll(".adp-dlg")].pop();dl.classList.add("wide");const ok=dl.querySelector("[data-o]");ok.disabled=true;
  const ac=dl.querySelector("#adp-ac"),au=dl.querySelector("#adp-au");const fc=()=>{ac.innerHTML=colOpts(sys?(au?au.value:me.id):null,AB.c!==""?AB.c:"0",false)};fc();if(au)au.onchange=fc;
- picker(dl.querySelector("#adp-pk"),d=>{pick=d;ok.disabled=false;dl.querySelector("#adp-asel").innerHTML=T("已选：","Selected: ")+'<b class="adp-mono">'+esc(d.id)+'</b> · '+esc(devName(d))+(d.group?' · '+esc(d.group):'')})}
+ picker(dl.querySelector("#adp-pk"),d=>{pick=d;ok.disabled=false;dl.querySelector("#adp-asel").innerHTML=T("已选：","Selected: ")+'<b class="adp-mono">'+esc(d.id)+'</b> · '+esc(devName(d))+(d.group?' · '+esc(LN(d.group)):'')})}
 /* ---- My Devices (Jay 10/29 batch 2): same look as System › Devices; Export + batch add to address book kept ---- */
 let MY={list:[],q:"",sel:new Set(),cols:[]};
 function myRows(){return MY.list.filter(p=>!MY.q||qMatch(MY.q,hay([p.id,p.hostname,p.alias,p.username,osName(p.os)]))).sort((a,b)=>(isOn(b)-isOn(a))||(b.last_online_time-a.last_online_time))}
@@ -199,12 +207,84 @@ function autoFilter(){const f=document.querySelector(".app-main .list-query .el-
  f.addEventListener("input",fire,true);f.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();last=sig();b.click()}},true);
  const iv=setInterval(()=>{if(!document.body.contains(f))return clearInterval(iv);fire()},600)}
 
+/* ---- 密码推送 inside the admin (Jay 10/30 batch 4): batch password + targets by device / device group / address book; per-device passwords are skipped ---- */
+const isPwPage=()=>/^#\/\?(.*&)?adp=pw(&|$)/.test(location.hash||"");
+let PWV={st:null,opt:null,q:"",f:""};
+const pwAb=a=>a.default?T(a.owner+" 的默认地址簿",a.owner+"'s default book"):LN(a.name)+(a.owner?" ("+a.owner+")":"");
+function pwScopeCount(sc,opt){if(!opt)return 0;if(sc.all)return opt.devices.length;const P=new Set(sc.peers),G=new Set(sc.dgroups),B=new Set(sc.abs);
+ return opt.devices.filter(d=>P.has(d.id)||G.has(d.group_id)||d.abs.some(k=>B.has(k))).length}
+function pwScopeHtml(sc,opt){if(sc.all)return'<span class="adp-chip">'+T("全部设备","All devices")+'</span>';const o=opt||{dgroups:[],abs:[]};
+ const ch=[...sc.dgroups.map(g=>{const x=o.dgroups.find(k=>k.id===g);return'🏬 '+(x?LN(x.name):"#"+g)}),...sc.abs.map(a=>{const x=o.abs.find(k=>k.key===a);return'📒 '+(x?pwAb(x):a)}),...sc.peers.map(p=>'🖥 '+p)];
+ return ch.length?ch.map(c=>'<span class="adp-chip">'+esc(c)+'</span>').join(" "):'<span class="adp-tag i">'+T("还没选推送对象","No targets yet")+'</span>'}
+function pwState(d,x){if(!x)return'—';if(x.have==null)return'<span class="adp-hint">'+T("未上报（旧版或未上线）","Not reported (old build or offline)")+'</span>';
+ return x.want&&x.have>=x.want?'<span class="adp-tag">'+T("已生效","Applied")+' v'+esc(x.have)+'</span>':'<span class="adp-amb" style="margin-left:0">'+T("待生效","Pending")+(x.want?' v'+esc(x.want):'')+'</span>'}
+function pwRows(){const st=PWV.st,opt=PWV.opt;if(!st||!opt)return[];const D=st.devices||{},q=PWV.q;
+ return opt.devices.filter(d=>D[d.id]).filter(d=>!q||qMatch(q,hay([d.id,d.name,d.group]))).filter(d=>{const x=D[d.id];
+  return!PWV.f||(PWV.f==="custom"?x.custom:PWV.f==="pending"?!x.custom&&!(x.have!=null&&x.have>=x.want):!x.custom&&x.have!=null&&x.have>=x.want)})
+  .sort((a,b)=>(D[b.id].custom-D[a.id].custom)||(isOn(b)-isOn(a))||a.id.localeCompare(b.id))}
+function pwRender(){const R=document.getElementById("adp");if(!R||R.dataset.v!=="pw")return;const st=PWV.st;if(!st)return;
+ R.querySelector("#adp-sum").innerHTML='<div class="adp-kv"><span>'+T("批量密码","Batch password")+'</span><b>'+(st.version?'v'+esc(st.version):T("还没设置过","Never set"))+'</b><span class="adp-hint">'+esc(st.updated_at||"")+'</span></div>'+
+  '<div class="adp-kv"><span>'+T("推送对象","Targets")+'</span><div>'+pwScopeHtml(st.scope,PWV.opt)+'</div></div>'+
+  '<div class="adp-kv"><span>'+T("覆盖","Coverage")+'</span><div>'+T("批量推送 <b>"+st.target_count+"</b> 台","Batch goes to <b>"+st.target_count+"</b> devices")+(st.skipped_custom.length?'　<span class="adp-cust">'+T("跳过 "+st.skipped_custom.length+" 台（有单独密码）","Skips "+st.skipped_custom.length+" (own password)")+'</span>':'')+
+  '　<span class="adp-hint">'+T("单独密码共 "+Object.keys(st.custom).length+" 台","Own password: "+Object.keys(st.custom).length+" devices")+'</span></div></div>';
+ const r=pwRows(),D=st.devices;
+ R.querySelector("#adp-tb").innerHTML=r.map(d=>{const x=D[d.id],c=st.custom[d.id];return'<tr class="r" data-id="'+esc(d.id)+'"><td class="adp-mono">'+esc(d.id)+'</td><td>'+esc(d.name||"—")+'</td><td>'+esc(LN(d.group)||T("未分组","No store"))+'</td><td>'+stHtml(d)+'</td><td>'+
+  (x.custom?'<span class="adp-cust">🔒 '+T("单独密码","Own password")+' v'+esc(c.v)+'</span>':'<span class="adp-chip">'+T("批量密码","Batch")+(st.version?' v'+esc(st.version):'')+'</span>')+'</td><td>'+pwState(d,x)+'</td><td class="act">'+
+  (x.custom?'<button class="btn sm" data-clr="'+esc(d.id)+'">'+T("改回批量密码","Use batch password")+'</button>':'<button class="btn sm" data-own="'+esc(d.id)+'">'+T("设单独密码","Set own password")+'</button>')+'</td></tr>'}).join("")||
+  '<tr><td colspan=7 style="text-align:center;color:#6B7280">'+(PWV.q||PWV.f?T("没有匹配的设备","No matching devices"):T("还没有推送对象，点「选择推送对象」","No targets yet. Click Choose targets."))+'</td></tr>';
+ R.querySelector("#adp-n").textContent=T("共 "+r.length+" 台",r.length+(r.length===1?" device":" devices"));
+ R.querySelectorAll("[data-clr]").forEach(b=>b.onclick=e=>{e.stopPropagation();pwClear(b.dataset.clr)});
+ R.querySelectorAll("[data-own]").forEach(b=>b.onclick=e=>{e.stopPropagation();const d=PWV.opt.devices.find(k=>k.id===b.dataset.own);ownPwDialog(d.id,d.name,s=>{PWV.st=s;pwRender()})})}
+async function pwLoad(){const[a,b]=await Promise.all([api(PW),api(ACL+"pw-options")]);PWV.st=a;PWV.opt=b;S.pw=a}
+function pwMount(main){document.querySelectorAll(".el-menu .is-active").forEach(e=>e.classList.remove("is-active"));const mi=document.getElementById("adp-menu");if(mi)mi.classList.add("is-active");PWV.q=PWV.f="";const R=document.createElement("div");R.id="adp";R.dataset.v="pw";
+ R.innerHTML='<div class="card"><div class="adp-pwh"><div><h3>'+T("密码推送","Password push")+'</h3><div class="adp-hint">'+T("给一批设备统一设一个固定密码。在线设备约 15 秒内生效，离线设备下次上线时生效。服务器只保存密码的哈希。需要 76 版及以后。设了单独密码的设备不会被批量推送覆盖。","Set one permanent password for a batch of devices. Online devices update in about 15 seconds, offline ones when they next come online. The server stores only a hash. Needs build 76 or later. Devices with their own password are never overwritten by a batch push.")+'</div></div></div><div id="adp-sum" class="adp-sum">'+T("加载中…","Loading…")+'</div></div>'+
+ '<div class="card" style="margin-top:12px"><div class="bar"><input id="adp-q" placeholder="'+T("搜索设备 ID / 名称 / 门店","Search ID / name / store")+'"><select id="adp-f"><option value="">'+T("全部状态","All statuses")+'</option><option value="pending">'+T("待生效","Pending")+'</option><option value="ok">'+T("已生效","Applied")+'</option><option value="custom">'+T("单独密码","Own password")+'</option></select><button class="btn txt" id="adp-r">'+T("重置","Reset")+'</button><span style="flex:1"></span><span id="adp-n" class="adp-hint"></span>'+
+ '<button class="btn" id="adp-tg">'+T("选择推送对象","Choose targets")+'</button><button class="btn pri" id="adp-push">'+T("设置新密码并推送","Set new password & push")+'</button></div>'+
+ '<table><thead><tr><th>'+T("设备 ID","Device ID")+'</th><th>'+T("名称","Name")+'</th><th>'+T("门店","Store")+'</th><th>'+T("在线","Online")+'</th><th>'+T("密码来源","Password")+'</th><th>'+T("推送状态","Push status")+'</th><th class="act">'+T("操作","Actions")+'</th></tr></thead><tbody id="adp-tb"><tr><td colspan=7 style="text-align:center;color:#6B7280">'+T("加载中…","Loading…")+'</td></tr></tbody></table></div>';
+ main.appendChild(R);const q=R.querySelector("#adp-q"),f=R.querySelector("#adp-f");q.oninput=deb(()=>{PWV.q=q.value.trim();pwRender()},200);f.onchange=()=>{PWV.f=f.value;pwRender()};
+ R.querySelector("#adp-r").onclick=()=>{q.value="";f.value="";PWV.q=PWV.f="";pwRender()};R.querySelector("#adp-tg").onclick=pwPicker;R.querySelector("#adp-push").onclick=pwPush;
+ pwLoad().then(pwRender).catch(e=>{R.querySelector("#adp-sum").innerHTML='<span style="color:#C62828">'+T("读取失败（需在内网用管理员登录）：","Failed to load (sign in as admin on the internal network): ")+esc(e.message)+'</span>';R.querySelector("#adp-tb").innerHTML=""})}
+function pwPicker(){const opt=PWV.opt;if(!opt)return;const sc=JSON.parse(JSON.stringify(PWV.st.scope));let dq="";
+ const cnt=(key,fn)=>opt.devices.filter(fn).length;
+ const body=()=>'<label class="adp-ck adp-allck"><input type="checkbox" id="adp-pall"'+(sc.all?" checked":"")+'> <b>'+T("全部设备","All devices")+'</b> <span class="adp-hint">（'+opt.devices.length+'）</span></label>'+
+  '<div class="adp-tgs'+(sc.all?' off':'')+'"><div class="adp-tgc"><h5>🏬 '+T("设备组（门店）","Device groups (stores)")+'</h5>'+(opt.dgroups.map(g=>'<label class="adp-ck"><input type="checkbox" data-g="'+esc(g.id)+'"'+(sc.dgroups.includes(g.id)?" checked":"")+'> '+esc(LN(g.name))+' <span class="adp-hint">（'+cnt(0,d=>d.group_id===g.id)+'）</span></label>').join("")||'<span class="adp-hint">'+T("没有设备组","No device groups")+'</span>')+'</div>'+
+  '<div class="adp-tgc"><h5>📒 '+T("地址簿","Address books")+'</h5>'+(opt.abs.map(a=>'<label class="adp-ck"><input type="checkbox" data-b="'+esc(a.key)+'"'+(sc.abs.includes(a.key)?" checked":"")+'> '+esc(pwAb(a))+' <span class="adp-hint">（'+cnt(0,d=>d.abs.includes(a.key))+'）</span></label>').join("")||'<span class="adp-hint">'+T("没有地址簿","No address books")+'</span>')+'</div>'+
+  '<div class="adp-tgc wide"><h5>🖥 '+T("单台设备","Individual devices")+' <span class="adp-hint" id="adp-pdn"></span></h5><input class="adp-pq" id="adp-pdq" placeholder="'+T("输入设备 ID、名称或门店搜索","Search by device ID, name or store")+'" autocomplete="off"><div class="adp-pl" id="adp-pdl"></div></div></div>'+
+  '<div class="adp-tot" id="adp-ptot"></div>';
+ dialog('<h4>'+T("选择推送对象","Choose push targets")+'</h4><div class="adp-hint" style="margin-bottom:10px">'+T("可以同时勾选设备组、地址簿和单台设备，推送对象是它们的合集。设备组和地址簿按推送时的成员计算，以后新加入的设备也会收到。","Tick any mix of device groups, address books and single devices; the targets are their union. Groups and books are evaluated live, so devices added later get the password too.")+'</div><div id="adp-pb"></div>',
+  async()=>{const s=await api(PW,{scope:sc});PWV.st=s;S.pw=s;pwRender();toast(T("推送对象已保存","Targets saved"))},T("保存推送对象","Save targets"));
+ const dl=[...document.querySelectorAll(".adp-dlg")].pop();dl.classList.add("wide","xl");const pb=dl.querySelector("#adp-pb");
+ const tot=()=>{const n=pwScopeCount(sc,opt),cu=PWV.st.custom||{};const sk=opt.devices.filter(d=>cu[d.id]&&(sc.all||sc.peers.includes(d.id)||sc.dgroups.includes(d.group_id)||d.abs.some(k=>sc.abs.includes(k)))).length;
+  dl.querySelector("#adp-ptot").innerHTML=T("将推送到 <b>"+(n-sk)+"</b> 台设备","Will push to <b>"+(n-sk)+"</b> devices")+(sk?'　<span class="adp-cust">'+T("跳过 "+sk+" 台（有单独密码）","skipping "+sk+" with their own password")+'</span>':'');
+  const pdn=dl.querySelector("#adp-pdn");if(pdn)pdn.textContent=sc.peers.length?T("已选 "+sc.peers.length+" 台","("+sc.peers.length+" selected)"):""};
+ const list=()=>{const l=dl.querySelector("#adp-pdl");if(!l)return;const r=opt.devices.filter(d=>!dq||qMatch(dq,hay([d.id,d.name,d.group]))).sort((a,b)=>(sc.peers.includes(b.id)-sc.peers.includes(a.id))||(isOn(b)-isOn(a))||a.id.localeCompare(b.id)).slice(0,40);
+  l.innerHTML=r.map(d=>'<label class="adp-pi ck"><input type="checkbox" data-p="'+esc(d.id)+'"'+(sc.peers.includes(d.id)?" checked":"")+'><span class="adp-mono">'+esc(d.id)+'</span><span class="n">'+esc(d.name||"—")+(PWV.st.custom[d.id]?' <span class="adp-cust">🔒</span>':'')+'</span><span class="g">'+esc(LN(d.group)||T("未分组","No store"))+'</span><span class="s">'+stHtml(d)+'</span></label>').join("")||'<div class="adp-hint" style="padding:10px">'+T("没有匹配的设备","No matching devices")+'</div>';
+  l.querySelectorAll("[data-p]").forEach(i=>i.onchange=()=>{const k=i.dataset.p;sc.peers=i.checked?[...new Set(sc.peers.concat(k))]:sc.peers.filter(x=>x!==k);tot()})};
+ const draw=()=>{pb.innerHTML=body();pb.querySelector("#adp-pall").onchange=e=>{sc.all=e.target.checked;draw()};
+  pb.querySelectorAll("[data-g]").forEach(i=>i.onchange=()=>{const k=i.dataset.g;sc.dgroups=i.checked?[...new Set(sc.dgroups.concat(k))]:sc.dgroups.filter(x=>x!==k);tot()});
+  pb.querySelectorAll("[data-b]").forEach(i=>i.onchange=()=>{const k=i.dataset.b;sc.abs=i.checked?[...new Set(sc.abs.concat(k))]:sc.abs.filter(x=>x!==k);tot()});
+  const qi=pb.querySelector("#adp-pdq");qi.value=dq;qi.oninput=deb(()=>{dq=qi.value.trim();list()},150);list();tot()};draw()}
+function pwPush(){const st=PWV.st;if(!st)return;
+ dialog('<h4>'+T("设置新的批量密码并推送","Set a new batch password and push")+'</h4><div class="adp-hint" style="line-height:1.7">'+T("推送对象：","Targets: ")+pwScopeHtml(st.scope,PWV.opt)+'<br>'+T("将推送到 <b>"+st.target_count+"</b> 台设备","Goes to <b>"+st.target_count+"</b> devices")+(st.skipped_custom.length?'，<span class="adp-cust">'+T("跳过 "+st.skipped_custom.length+" 台（有单独密码）","skipping "+st.skipped_custom.length+" with their own password")+'</span>':'')+'</div>'+
+  '<input id="adp-np1" type="password" autocomplete="new-password" placeholder="'+T("新密码（8–64 位）","New password (8–64 characters)")+'"><input id="adp-np2" type="password" autocomplete="new-password" placeholder="'+T("再输入一次","Type it again")+'"><div class="adp-hint" id="adp-npm" style="margin-top:8px"></div>',
+  async()=>{const a=document.getElementById("adp-np1").value,b=document.getElementById("adp-np2").value;if(a.length<8||a.length>64)throw new Error(T("密码长度需 8–64 位","Password must be 8–64 characters"));if(a!==b)throw new Error(T("两次输入不一致","The two passwords don't match"));
+   if(!st.target_count)throw new Error(T("还没有推送对象","No targets yet"));const s=await api(PW,{password:a});PWV.st=s;S.pw=s;pwRender();toast(T("已推送，在线设备约 15 秒内更新","Pushed. Online devices update in about 15 seconds"))},T("推送","Push"))}
+function ownPwDialog(id,name,done){
+ dialog('<h4>'+T("设置这台设备的单独密码","Set this device's own password")+'</h4><div style="line-height:1.7">'+T('设备 <b class="adp-mono">'+esc(id)+'</b>'+(name?'（'+esc(name)+'）':''),'Device <b class="adp-mono">'+esc(id)+'</b>'+(name?' ('+esc(name)+')':''))+'</div>'+
+  '<input id="adp-op1" type="password" autocomplete="new-password" placeholder="'+T("新密码（8–64 位）","New password (8–64 characters)")+'"><input id="adp-op2" type="password" autocomplete="new-password" placeholder="'+T("再输入一次","Type it again")+'">'+
+  '<div class="adp-hint" style="margin-top:10px;line-height:1.7">'+T("只改这一台。设好后这台设备会标记为「单独密码」，以后的批量推送会跳过它，直到你点「改回批量密码」。在线设备约 15 秒内生效（需 76 版及以后）。","Only this device changes. It is marked \"Own password\" and batch pushes skip it until you click \"Use batch password\". Online devices update in about 15 seconds (build 76 or later).")+'</div>',
+  async()=>{const a=document.getElementById("adp-op1").value,b=document.getElementById("adp-op2").value;if(a.length<8||a.length>64)throw new Error(T("密码长度需 8–64 位","Password must be 8–64 characters"));if(a!==b)throw new Error(T("两次输入不一致","The two passwords don't match"));
+   const s=await api(ACL+"device-pw",{id:String(id),password:a,confirm:b});S.pw=s;toast(T("已设置单独密码","Own password set"));done&&done(s)},T("保存密码","Save password"))}
+function pwClear(id,done){const st=S.pw||PWV.st;
+ dialog('<h4>'+T("改回批量密码","Use the batch password")+'</h4><div style="line-height:1.7">'+T('清除设备 <b class="adp-mono">'+esc(id)+'</b> 的单独密码？','Clear the own password of device <b class="adp-mono">'+esc(id)+'</b>?')+'<br><span class="adp-hint">'+
+  (st&&st.version?T("如果它在推送对象里，会改用批量密码 v"+st.version+"，在线约 15 秒内生效；不在推送对象里的话，设备上的密码保持不变。","If it's in the targets it switches to batch password v"+st.version+" within about 15 seconds; otherwise the password on the device stays as it is."):T("还没有批量密码，设备上的密码保持不变。","There is no batch password yet, so the password on the device stays as it is."))+'</span></div>',
+  async()=>{const s=await api(ACL+"device-pw",{id:String(id),clear:true});S.pw=s;if(PWV.st)PWV.st=s;toast(T("已改回批量密码","Switched to batch password"));pwRender();done&&done(s)},T("改回批量密码","Use batch password"))}
 function menu(){const m=document.querySelector(".el-menu");if(!m||document.getElementById("adp-menu"))return;
  const li=document.createElement("li");li.id="adp-menu";li.className="el-menu-item";li.setAttribute("role","menuitem");
- li.innerHTML='<span>'+T('密码推送','Password push')+'</span><span class="adp-new">'+T('新','New')+'</span>';li.onclick=()=>window.open("/_admin/adoluna-password","_blank");m.appendChild(li)
- const l2=document.createElement("li");l2.id="adp-menu2";l2.className="el-menu-item";l2.setAttribute("role","menuitem");l2.innerHTML='<span>免密审计</span>';
- l2.onclick=async()=>{const m=document.createElement("div");m.className="adp-dlgm";m.innerHTML='<div class="adp-dlg" style="width:880px;max-height:80vh;overflow:auto"><h4>免密登录审计（最近 200 条）</h4><div id="adp-aud">读取中…</div><div style="text-align:right;margin-top:10px"><button class="btn">关闭</button></div></div>';
-  document.body.appendChild(m);m.querySelector("button").onclick=()=>m.remove();try{m.querySelector("#adp-aud").innerHTML=await auditHtml("")}catch(e){m.querySelector("#adp-aud").textContent="读取失败（需在内网用管理员登录）"}};m.appendChild(l2)}
+ li.innerHTML='<span>'+T('密码推送','Password push')+'</span><span class="adp-new">'+T('新','New')+'</span>';li.onclick=()=>{location.hash="#/?adp=pw"};m.appendChild(li)
+ const l2=document.createElement("li");l2.id="adp-menu2";l2.className="el-menu-item";l2.setAttribute("role","menuitem");l2.innerHTML='<span>'+T('免密审计','Passwordless audit')+'</span>';
+ l2.onclick=async()=>{const m=document.createElement("div");m.className="adp-dlgm";m.innerHTML='<div class="adp-dlg" style="width:880px;max-height:80vh;overflow:auto"><h4>'+T('免密登录审计（最近 200 条）','Passwordless audit (latest 200)')+'</h4><div id="adp-aud">'+T('读取中…','Loading…')+'</div><div style="text-align:right;margin-top:10px"><button class="btn">'+T('关闭','Close')+'</button></div></div>';
+  document.body.appendChild(m);m.querySelector("button").onclick=()=>m.remove();try{m.querySelector("#adp-aud").innerHTML=await auditHtml("")}catch(e){m.querySelector("#adp-aud").textContent=T("读取失败（需在内网用管理员登录）","Failed to load (sign in as admin on the internal network)")}};m.appendChild(l2)}
 /* ---- accounts: forgot-password link, forced change of a temporary password, admin reset (Jay 10/29) ---- */
 const ACCT="/_admin/adoluna-api/acct/";const onLogin=()=>/^#\/login(\?|$)/.test(location.hash||"");
 function loginLink(){if(!onLogin()||document.getElementById("adp-forgot"))return;const f=document.querySelector(".el-form");if(!f)return;

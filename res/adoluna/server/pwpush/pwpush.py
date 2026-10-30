@@ -197,13 +197,163 @@ def granted(uid, gid, is_admin, peer_id):
                 return True
     return False
 
+# ---- password push (batch 4, Jay 10/30) ----
+# state.json:  seq      highest version ever issued (global and per-device share ONE counter, so a device's
+#                       applied version only ever goes up whichever source it came from)
+#              v/payload the batch ("global") password: signed {v,h,s,sig}; h = b64 sha256(pw+salt)
+#              scope    {"all":bool, "peers":[id], "dgroups":[gid], "abs":["c<collection id>" | "u<user id>"]}
+#              custom   {peer_id: {v,h,s,sig,at,by}}   device's own password; batch pushes skip it
+#              reissue  {peer_id: {v,sig}}  batch password re-signed with a fresh version for one device
+#                       (after its custom password is cleared, its applied version may be above the batch one)
+# Only salted hashes are stored.  Clients (build 76+) verify sig over "adoluna-pw-v1\nv\nh\ns" and
+# apply when their adoluna_pw_ver < v.
+def _salt():
+    return "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+
+def _sign(v, h, salt):
+    return base64.b64encode(KEY.sign(f"adoluna-pw-v1\n{v}\n{h}\n{salt}".encode())).decode()
+
+def next_v(st):
+    v = max(int(st.get("seq", 0)), int(st.get("v", 0)),
+            *[int(x.get("v", 0)) for x in st.get("custom", {}).values()],
+            *[int(x.get("v", 0)) for x in st.get("reissue", {}).values()]) + 1
+    st["seq"] = v
+    return v
+
+def pw_payload(st, pw):
+    salt = _salt(); h = base64.b64encode(sha256((pw + salt).encode()).digest()).decode()
+    v = next_v(st)
+    return {"v": v, "h": h, "s": salt, "sig": _sign(v, h, salt)}
+
+def now_s():
+    return time.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+def scope_of(st):
+    sc = st.get("scope")
+    if not sc:  # pre-batch-4 state: "targets" list, empty = every device
+        t = [str(x) for x in st.get("targets", [])]
+        sc = {"all": not t, "peers": t, "dgroups": [], "abs": []}
+    return {"all": bool(sc.get("all")), "peers": [str(x) for x in sc.get("peers", [])],
+            "dgroups": [str(x) for x in sc.get("dgroups", [])], "abs": [str(x) for x in sc.get("abs", [])]}
+
+def clean_scope(q):
+    ids = lambda k, ok: sorted({str(x).strip() for x in (q.get(k) or []) if ok(str(x).strip())})[:2000]
+    return {"all": bool(q.get("all")), "peers": ids("peers", str.isdigit), "dgroups": ids("dgroups", str.isdigit),
+            "abs": ids("abs", lambda x: len(x) > 1 and x[0] in "cu" and x[1:].isdigit())}
+
 def set_pw(st, pw, by):
-    salt = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
-    h = base64.b64encode(sha256((pw + salt).encode()).digest()).decode()
-    v = int(st.get("v", 0)) + 1
-    sig = base64.b64encode(KEY.sign(f"adoluna-pw-v1\n{v}\n{h}\n{salt}".encode())).decode()
-    st.update(v=v, payload={"v": v, "h": h, "s": salt, "sig": sig},
-              updated_at=time.strftime("%Y-%m-%d %H:%M:%S %Z"), updated_by=by)
+    st["payload"] = pw_payload(st, pw); st["v"] = st["payload"]["v"]
+    st["reissue"] = {}  # older re-issues are superseded by the new batch password
+    st.update(updated_at=now_s(), updated_by=by)
+
+def set_custom(st, peer, pw, by):
+    p = pw_payload(st, pw); p.update(at=now_s(), by=by)
+    st.setdefault("custom", {})[peer] = p
+    st.get("reissue", {}).pop(peer, None)
+    return p["v"]
+
+def clear_custom(st, peer):
+    """Device goes back to the batch password.  Re-sign it with a fresh version so a device whose applied
+    (custom) version is above the batch version still takes it."""
+    if st.get("custom", {}).pop(peer, None) is None:
+        return None
+    p = st.get("payload")
+    if not p:
+        return None
+    v = next_v(st)
+    st.setdefault("reissue", {})[peer] = {"v": v, "sig": _sign(v, p["h"], p["s"])}
+    return v
+
+_SCOPE_CACHE = {"k": None, "t": 0, "set": set()}
+def scope_peers(sc):
+    """Resolve a scope to a set of device IDs (union of devices, device groups, address books)."""
+    c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=3)
+    try:
+        if sc["all"]:
+            return {str(r[0]) for r in c.execute("select id from peers")}
+        out = set(sc["peers"])
+        if sc["dgroups"]:
+            q = ",".join("?" * len(sc["dgroups"]))
+            out |= {str(r[0]) for r in c.execute(f"select id from peers where group_id in ({q})", [int(x) for x in sc["dgroups"]])}
+        for a in sc["abs"]:
+            if a[0] == "c":
+                rows = c.execute("select id from address_books where collection_id=?", (int(a[1:]),))
+            else:
+                rows = c.execute("select id from address_books where collection_id=0 and user_id=?", (int(a[1:]),))
+            out |= {str(r[0]) for r in rows}
+        return out
+    finally:
+        c.close()
+
+def in_scope(st, dev):
+    sc = scope_of(st)
+    if sc["all"]:
+        return True
+    if dev in sc["peers"]:
+        return True
+    if not sc["dgroups"] and not sc["abs"]:
+        return False
+    k = json.dumps(sc, sort_keys=True); now = time.time()
+    if _SCOPE_CACHE["k"] != k or now - _SCOPE_CACHE["t"] > 30:  # heartbeats are frequent: re-resolve at most every 30 s
+        try:
+            _SCOPE_CACHE.update(k=k, t=now, set=scope_peers(sc))
+        except Exception:
+            return False
+    return dev in _SCOPE_CACHE["set"]
+
+def effective(st, dev):
+    """The signed payload this device should end up on, or None."""
+    c = st.get("custom", {}).get(dev)
+    if c:
+        return {k: c[k] for k in ("v", "h", "s", "sig")}
+    p = st.get("payload")
+    if not p or not in_scope(st, dev):
+        return None
+    r = st.get("reissue", {}).get(dev)
+    if r and int(r["v"]) > int(p["v"]):
+        return {"v": r["v"], "h": p["h"], "s": p["s"], "sig": r["sig"]}
+    return dict(p)
+
+def pw_options():
+    """Everything the target picker needs: devices (with group id and address-book keys), device groups, address books."""
+    c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=3)
+    try:
+        users = {r[0]: r[1] or r[2] for r in c.execute("select id, nickname, username from users")}
+        abk = {}
+        for i, col, uid in c.execute("select id, collection_id, user_id from address_books"):
+            abk.setdefault(str(i), set()).add("c%d" % col if col else "u%d" % uid)
+        devs = [{"id": str(i), "name": a or h or "", "group_id": str(g or ""), "group": gn or "", "os": o or "",
+                 "last_online_time": lo or 0, "abs": sorted(abk.get(str(i), ()))}
+                for i, h, a, o, lo, g, gn in c.execute("select p.id, p.hostname, p.alias, p.os, p.last_online_time, p.group_id, g.name "
+                                                       "from peers p left join device_groups g on g.id=p.group_id order by p.id")]
+        dg = [{"id": str(i), "name": n} for i, n in c.execute("select id, name from device_groups order by name")]
+        abs_ = [{"key": "c%d" % i, "name": n, "owner": users.get(u, "#%s" % u)} for i, u, n in
+                c.execute("select id, user_id, name from address_book_collections order by name")]
+        abs_ += [{"key": "u%d" % u, "name": "", "owner": users.get(u, "#%s" % u), "default": True}
+                 for (u,) in c.execute("select distinct user_id from address_books where collection_id=0 order by user_id")]
+        return {"devices": devs, "dgroups": dg, "abs": abs_}
+    finally:
+        c.close()
+
+SEEN = {}  # peer -> applied version last reported in a heartbeat (memory + adoluna.db)
+def seen(dev, ver):
+    if SEEN.get(dev) == ver:
+        return
+    SEEN[dev] = ver
+    try:
+        with acl() as c:
+            c.execute("create table if not exists pw_seen(peer_id text primary key, ver integer, ts integer)")
+            c.execute("insert or replace into pw_seen values(?,?,?)", (dev, ver, int(time.time())))
+    except Exception:
+        pass
+
+def seen_all():
+    try:
+        with acl() as c:
+            c.execute("create table if not exists pw_seen(peer_id text primary key, ver integer, ts integer)")
+            return {r[0]: {"ver": r[1], "ts": r[2]} for r in c.execute("select peer_id, ver, ts from pw_seen")}
+    except Exception:
+        return {}
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -280,8 +430,8 @@ class H(BaseHTTPRequestHandler):
         if idx and r.status == 200 and b"</head>" in data and PEERUI:
             data = data.replace(b"<head>", b"<head><script>try{if(!localStorage.getItem('adoluna_lang_init')){localStorage.setItem('lang','zh-CN');"
                                 b"localStorage.setItem('adoluna_lang_init','1')}}catch(e){}</script>", 1)
-            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=7">'
-                                b'<script src="/_admin/adoluna-peerui.js?v=7" defer></script></head>', 1)
+            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=8">'
+                                b'<script src="/_admin/adoluna-peerui.js?v=8" defer></script></head>', 1)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
         if ent and r.status == 200 and PEERUI:  # admin build hides these menus; admins need Users (email, reset password)
             for a, b in UNHIDE:
@@ -301,16 +451,13 @@ class H(BaseHTTPRequestHandler):
 
     def add_pw(self, req, data):
         try:
-            st = load(); p = st.get("payload")
-            if not p:
-                return data
             q = json.loads(req or b"{}")
-            dev = str(q.get("id", ""))
-            if int(q.get("adoluna_pw_ver") or 0) >= p["v"] or "adoluna_pw_ver" not in q:
+            if "adoluna_pw_ver" not in q:
                 return data  # old builds don't send the field: never hand them the hash
-            if st.get("targets") and dev not in st["targets"]:
-                return data
-            if not known_peer(dev):
+            dev = str(q.get("id", "")); have = int(q.get("adoluna_pw_ver") or 0)
+            seen(dev, have)
+            p = effective(load(), dev)
+            if not p or have >= int(p["v"]) or not known_peer(dev):
                 return data
             out = json.loads(data or b"{}")
             out["adoluna_pw"] = p
@@ -396,7 +543,7 @@ class H(BaseHTTPRequestHandler):
 
     def acl_admin(self, path):
         if not self.admin_ok():
-            return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台"}).encode())
+            return self.send(403, json.dumps({"error": self.tr("需要在内网用管理员账号登录后台", "Sign in as an administrator on the internal network")}).encode())
         by = self.client_ip()
         if path == "/_admin/adoluna-api/acl" and self.command == "GET":
             with acl() as c:
@@ -418,7 +565,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/_admin/adoluna-api/role":
             peer = str(q.get("peer_id", "")).strip()
             if not peer.isdigit() or not known_peer(peer):
-                return self.send(400, json.dumps({"error": "设备 ID 无效"}).encode())
+                return self.send(400, json.dumps({"error": self.tr("设备 ID 无效", "Invalid device ID")}).encode())
             a, co = int(bool(q.get("accept"))), int(bool(q.get("ctrl_only")))
             with LOCK, acl() as c:
                 old = c.execute("select ts from roles where peer_id=?", (peer,)).fetchone()
@@ -445,7 +592,7 @@ class H(BaseHTTPRequestHandler):
 
     def audit_list(self):
         if not self.admin_ok():
-            return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台"}).encode())
+            return self.send(403, json.dumps({"error": self.tr("需要在内网用管理员账号登录后台", "Sign in as an administrator on the internal network")}).encode())
         from urllib.parse import urlparse, parse_qs
         p = parse_qs(urlparse(self.path).query)
         lim = min(int((p.get("limit") or ["200"])[0]), 1000)
@@ -475,9 +622,26 @@ class H(BaseHTTPRequestHandler):
             return False
 
     def status(self):
-        st = load()
+        st = load(); sc = scope_of(st); sn = seen_all()
+        try:
+            tgt = scope_peers(sc)
+        except Exception:
+            tgt = set()
+        cust = {k: {"v": x["v"], "at": x.get("at"), "by": x.get("by")} for k, x in st.get("custom", {}).items()}
+        devs = {}
+        for d in tgt | set(cust):
+            e = effective(st, d)
+            devs[d] = {"custom": d in cust, "want": e["v"] if e else 0, "have": (sn.get(d) or {}).get("ver")}
         return {"version": st.get("v", 0), "updated_at": st.get("updated_at"), "updated_by": st.get("updated_by"),
-                "targets": st.get("targets", [])}
+                "scope": sc, "targets": sc["peers"] if not sc["all"] else [], "custom": cust,
+                "devices": devs, "target_count": len(tgt - set(cust)), "skipped_custom": sorted(tgt & set(cust))}
+
+    def tr(self, zh, en):
+        return en if str(self.headers.get("Accept-Language", "zh")).lower().startswith("en") else zh
+
+    def is_admin(self):
+        u = ACC.uid_for_token(self.headers.get("api-token", ""))
+        return bool(u and u[1]) and self.admin_ok()
 
     def admin(self):
         path = self.path.split("?")[0]
@@ -502,25 +666,36 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, json.dumps({"list": device_index()}, ensure_ascii=False).encode(), extra=[("Cache-Control", "no-store")])
             except Exception:
                 return self.send(503, b'{"error":"db busy"}')
-        if path == "/_admin/adoluna-api/reset":
-            if self.command != "POST" or not self.admin_ok():
-                return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台"}).encode())
-            n = int(self.headers.get("Content-Length") or 0)
+        if path == "/_admin/adoluna-api/pw-options":
+            if not self.is_admin():
+                return self.send(403, json.dumps({"error": self.tr("需要在内网用管理员账号登录后台", "Sign in as an administrator on the internal network")}).encode())
             try:
-                dev = str(json.loads(self.rfile.read(n) or b"{}").get("id", "")).strip()
+                return self.send(200, json.dumps(pw_options(), ensure_ascii=False).encode(), extra=[("Cache-Control", "no-store")])
             except Exception:
-                dev = ""
+                return self.send(503, b'{"error":"db busy"}')
+        if path in ("/_admin/adoluna-api/reset", "/_admin/adoluna-api/device-pw"):
+            zh = not str(self.headers.get("Accept-Language", "zh")).lower().startswith("en")
+            if self.command != "POST" or not self.is_admin():
+                return self.send(403, json.dumps({"error": "只有管理员可以设置设备密码" if zh else "Only an administrator can set device passwords."}).encode())
+            q = self.body_json() or {}
+            dev = str(q.get("id", "")).strip()
             if not dev.isdigit() or not known_peer(dev):
-                return self.send(400, json.dumps({"error": "设备 ID 无效"}).encode())
+                return self.send(400, json.dumps({"error": "设备 ID 无效" if zh else "Invalid device ID"}).encode())
             with LOCK:
-                st = load(); t = st.get("targets", [])
-                if not t:
-                    note = "已在推送范围（全部设备）"
-                elif dev in t:
-                    note = "已在推送范围"
-                else:
-                    st["targets"] = (t + [dev])[:200]; save(st); note = "已加入推送范围"
-            out = self.status(); out["note"] = note
+                st = load()
+                if q.get("clear"):
+                    v = clear_custom(st, dev); save(st)
+                    sys.stderr.write("device-pw clear %s by %s\n" % (dev, self.client_ip()))
+                    out = self.status(); out["note"] = "cleared"; out["reissued"] = v
+                    return self.send(200, json.dumps(out).encode())
+                pw = q.get("password")
+                if not isinstance(pw, str) or not 8 <= len(pw) <= 64:
+                    return self.send(400, json.dumps({"error": "密码长度需 8–64 位" if zh else "Password must be 8–64 characters"}).encode())
+                if q.get("confirm") is not None and q.get("confirm") != pw:
+                    return self.send(400, json.dumps({"error": "两次输入不一致" if zh else "The two passwords don't match"}).encode())
+                v = set_custom(st, dev, pw, self.client_ip()); save(st)
+            sys.stderr.write("device-pw set %s v%s by %s\n" % (dev, v, self.client_ip()))
+            out = self.status(); out["note"] = "custom"
             return self.send(200, json.dumps(out).encode())
         if path in ("/_admin/adoluna-api/acl", "/_admin/adoluna-api/role", "/_admin/adoluna-api/grant"):
             return self.acl_admin(path)
@@ -528,8 +703,8 @@ class H(BaseHTTPRequestHandler):
             return self.audit_list()
         if path != "/_admin/adoluna-api/password":
             return self.send(404, b"{}")
-        if not self.admin_ok():
-            return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台"}).encode())
+        if not (self.admin_ok() if self.command == "GET" else self.is_admin()):
+            return self.send(403, json.dumps({"error": self.tr("需要在内网用管理员账号登录后台", "Sign in as an administrator on the internal network")}).encode())
         if self.command == "GET":
             return self.send(200, json.dumps(self.status()).encode())
         n = int(self.headers.get("Content-Length") or 0)
@@ -539,12 +714,15 @@ class H(BaseHTTPRequestHandler):
             return self.send(400, b'{"error":"bad json"}')
         with LOCK:
             st = load()
-            if "targets" in q:
-                st["targets"] = [t.strip() for t in q["targets"] if str(t).strip()][:200]
+            if "scope" in q and isinstance(q["scope"], dict):
+                st["scope"] = clean_scope(q["scope"]); st.pop("targets", None)
+            elif "targets" in q:  # legacy page / CLI
+                t = [str(x).strip() for x in q["targets"] if str(x).strip()][:2000]
+                st["scope"] = {"all": not t, "peers": t, "dgroups": [], "abs": []}; st.pop("targets", None)
             pw = q.get("password")
             if pw is not None:
                 if not isinstance(pw, str) or len(pw) < 8 or len(pw) > 64:
-                    return self.send(400, json.dumps({"error": "密码长度需 8–64 位"}).encode())
+                    return self.send(400, json.dumps({"error": self.tr("密码长度需 8–64 位", "Password must be 8–64 characters")}).encode())
                 set_pw(st, pw, self.client_address[0])
             save(st)
         return self.send(200, json.dumps(self.status()).encode())
@@ -624,12 +802,13 @@ def cli():
     import getpass
     a = sys.argv[1:]; st = load()
     if a[0] == "status":
-        print({k: st.get(k) for k in ("v", "updated_at", "updated_by", "targets")}); return
+        print({"v": st.get("v"), "updated_at": st.get("updated_at"), "scope": scope_of(st), "custom": sorted(st.get("custom", {}))}); return
+    tg = lambda t: {"all": t == "all", "peers": [] if t == "all" else [x for x in t.split(",") if x], "dgroups": [], "abs": []}
     if a[0] == "targets":
-        st["targets"] = [] if a[1] == "all" else [x for x in a[1].split(",") if x]
+        st["scope"] = tg(a[1]); st.pop("targets", None)
     elif a[0] == "set":
         if "--targets" in a:
-            t = a[a.index("--targets") + 1]; st["targets"] = [] if t == "all" else [x for x in t.split(",") if x]
+            st["scope"] = tg(a[a.index("--targets") + 1]); st.pop("targets", None)
         pw = sys.stdin.readline().rstrip("\n") if not sys.stdin.isatty() else getpass.getpass("新的固定密码: ")
         if sys.stdin.isatty() and getpass.getpass("再输入一次: ") != pw:
             sys.exit("两次输入不一致")
@@ -638,7 +817,7 @@ def cli():
         set_pw(st, pw, "cli")
     with LOCK:
         save(st)
-    print({k: st.get(k) for k in ("v", "updated_at", "targets")})
+    print({"v": st.get("v"), "updated_at": st.get("updated_at"), "scope": scope_of(st)})
 
 if __name__ == "__main__" and len(sys.argv) > 1:
     cli(); sys.exit(0)
