@@ -27,3 +27,6 @@
 
 /* Jay 20261029: no tabs bar; sidebar navigation only */
 .header-tags{display:none !important}
+/* 20261029: header lang/user controls visible in light & dark */
+.app-header .setting .menu-item .title,.app-header .setting .menu-item .title .el-icon,.app-header .setting .nickname{color:var(--el-text-color-primary) !important}
+.app-header .setting .menu-item .title svg{color:inherit !important}
