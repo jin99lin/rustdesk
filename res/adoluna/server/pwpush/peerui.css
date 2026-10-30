@@ -30,3 +30,5 @@
 /* 20261029: header lang/user controls visible in light & dark */
 .app-header .setting .menu-item .title,.app-header .setting .menu-item .title .el-icon,.app-header .setting .nickname{color:var(--el-text-color-primary) !important}
 .app-header .setting .menu-item .title svg{color:inherit !important}
+#adp-forgot{text-align:right;margin-top:8px;font-size:13px}#adp-forgot a{color:var(--el-color-primary);text-decoration:none}
+#adp-mc input{display:block;width:100%;box-sizing:border-box;margin-top:10px}

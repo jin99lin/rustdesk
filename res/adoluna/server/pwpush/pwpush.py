@@ -8,6 +8,8 @@ import base64, http.client, ipaddress, json, os, secrets, sqlite3, string, sys, 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from hashlib import sha256
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import accounts as ACC
 
 LISTEN = (os.environ.get("PW_LISTEN", "10.20.26.62"), int(os.environ.get("PW_PORT", "21114")))
 UP = (os.environ.get("PW_UP_HOST", "127.0.0.1"), int(os.environ.get("PW_UP_PORT", "21124")))
@@ -90,10 +92,34 @@ class H(BaseHTTPRequestHandler):
             for k in list(hdr):
                 if k.lower() in ("accept-encoding", "if-none-match", "if-modified-since"):
                     del hdr[k]
+        path0 = self.path.split("?")[0]
+        cur = None
+        if path0.startswith("/api/admin/") and self.headers.get("api-token"):
+            if path0 not in ACC.ALLOW_FORCED and ACC.load().get("must_change"):
+                cur = ACC.uid_for_token(self.headers.get("api-token"))
+                if cur and ACC.must_change(cur[0]):
+                    return self.send(200, json.dumps({"code": 101, "message": "请先修改临时密码 / Change your temporary password first",
+                                                      "data": None, "adoluna_must_change": True}).encode())
+            if path0 == "/api/admin/user/changeCurPwd" and self.command == "POST":
+                try:
+                    q = json.loads(body or b"{}")
+                except Exception:
+                    q = {}
+                zh = not str(self.headers.get("Accept-Language", "zh")).lower().startswith("en")
+                bad = ACC.pw_problem(q.get("new_password"), zh)
+                if bad:
+                    return self.send(200, json.dumps({"code": 101, "message": bad, "data": None}, ensure_ascii=False).encode())
+                cur = ACC.uid_for_token(self.headers.get("api-token"))
         try:
             r, data = self.upstream(self.command, self.path, body, hdr)
         except Exception as e:
             return self.send(502, b'{"error":"upstream"}')
+        if path0 == "/api/admin/user/changeCurPwd" and cur and r.status == 200:
+            try:
+                if json.loads(data).get("code") == 0:
+                    ACC.set_must(cur[0], False)
+            except Exception:
+                pass
         if self.command == "POST" and self.path.split("?")[0] == "/api/heartbeat" and r.status == 200:
             data = self.add_pw(body, data)
         extra = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP and k.lower() != "content-type"]
@@ -156,6 +182,8 @@ class H(BaseHTTPRequestHandler):
             f = os.path.join(HERE, path.rsplit("-", 1)[1])
             ct = "application/javascript; charset=utf-8" if f.endswith(".js") else "text/css; charset=utf-8"
             return self.send(200, open(f, "rb").read(), ct, [("Cache-Control", "no-cache")])
+        if path.startswith("/_admin/adoluna-api/acct/") or path in ("/_admin/adoluna-forgot", "/_admin/adoluna-reset"):
+            return self.acct(path)
         if path == "/_admin/adoluna-api/reset":
             if self.command != "POST" or not self.admin_ok():
                 return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台"}).encode())
@@ -198,6 +226,67 @@ class H(BaseHTTPRequestHandler):
                 set_pw(st, pw, self.client_address[0])
             save(st)
         return self.send(200, json.dumps(self.status()).encode())
+
+    def body_json(self):
+        n = min(int(self.headers.get("Content-Length") or 0), 65536)
+        try:
+            return json.loads(self.rfile.read(n) or b"{}")
+        except Exception:
+            return {}
+
+    def jout(self, code, obj):
+        return self.send(code, json.dumps(obj, ensure_ascii=False).encode(), extra=[("Cache-Control", "no-store")])
+
+    def acct(self, path):
+        ip = self.client_address[0]
+        if not private(ip) or any(self.headers.get(h) and not all(private(x) for x in self.headers[h].split(","))
+                                  for h in ("X-Forwarded-For", "X-Real-IP")):
+            return self.send(403, b"forbidden", "text/plain")
+        if path in ("/_admin/adoluna-forgot", "/_admin/adoluna-reset"):
+            return self.send(200, open(os.path.join(HERE, "account.html"), "rb").read(), "text/html; charset=utf-8",
+                             [("Cache-Control", "no-store"), ("Referrer-Policy", "no-referrer"), ("X-Frame-Options", "DENY")])
+        act = path.rsplit("/", 1)[1]
+        if act == "me":
+            u = ACC.uid_for_token(self.headers.get("api-token", ""))
+            return self.jout(200, {"must_change": bool(u and ACC.must_change(u[0])), "is_admin": bool(u and u[1])} if u else {"error": "login"})
+        if self.command != "POST":
+            return self.jout(405, {"error": "POST"})
+        q = self.body_json(); zh = not str(q.get("lang", "zh")).lower().startswith("en")
+        if act == "forgot":
+            code = ACC.request_reset(str(q.get("email", "")), ip, q.get("lang"))
+            if code == 429:
+                return self.jout(429, {"error": "请求太多次，请 15 分钟后再试" if zh else "Too many requests. Try again in 15 minutes."})
+            return self.jout(200, {"message": ACC.NEUTRAL["zh" if zh else "en"]})
+        if act == "check":
+            return self.jout(200, {"valid": ACC.find_reset(str(q.get("t", ""))) is not None})
+        if act == "reset":
+            if q.get("new") != q.get("confirm"):
+                return self.jout(400, {"error": "两次输入的新密码不一致" if zh else "The two new passwords don't match."})
+            code, msg = ACC.do_reset(str(q.get("t", "")), q.get("code"), q.get("new"), zh, ip)
+            return self.jout(code, {"message": msg} if code == 200 else {"error": msg})
+        if act == "admin-reset":
+            u = ACC.uid_for_token(self.headers.get("api-token", ""))
+            if not u or not u[1]:
+                return self.jout(403, {"error": "只有管理员可以重设密码" if zh else "Only an administrator can reset passwords."})
+            try:
+                target = int(q.get("user_id"))
+            except Exception:
+                return self.jout(400, {"error": "user_id"})
+            if target == u[0]:
+                return self.jout(400, {"error": "不能重设自己的密码，请到「个人信息」修改" if zh else "You can't reset your own password here. Use My Info."})
+            tmp = ACC.temp_password()
+            try:
+                r, d = self.upstream("POST", "/api/admin/user/changePwd", json.dumps({"id": target, "password": tmp}),
+                                     {"api-token": self.headers.get("api-token", ""), "Content-Type": "application/json"})
+                ok = r.status == 200 and json.loads(d).get("code") == 0
+            except Exception:
+                ok = False
+            if not ok:
+                return self.jout(400, {"error": "重设失败" if zh else "Reset failed."})
+            ACC.set_must(target, True)
+            sys.stderr.write("admin-reset user %s by %s from %s\n" % (target, u[0], ip))
+            return self.jout(200, {"temp_password": tmp})
+        return self.jout(404, {})
 
     def handle_any(self):
         if self.path.startswith("/_admin/adoluna"):

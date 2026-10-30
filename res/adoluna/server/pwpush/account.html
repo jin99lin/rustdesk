@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>Adoluna Support</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--tx:#1f2328;--mu:#6b7280;--bd:#d0d7de;--pri:#0b5cad}
+@media(prefers-color-scheme:dark){:root{--bg:#15181d;--card:#1f232a;--tx:#e5eaf3;--mu:#9aa4b2;--bd:#3a414b;--pri:#4b9be8}}
+body{margin:0;font:15px/1.6 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--tx);display:flex;min-height:100vh;align-items:center;justify-content:center}
+.c{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:32px;width:min(400px,90vw);box-sizing:border-box}
+h1{font-size:20px;margin:0 0 6px}p{color:var(--mu);margin:0 0 18px;font-size:14px}
+label{display:block;font-size:13px;margin:12px 0 4px}input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--bd);border-radius:8px;background:transparent;color:var(--tx);font-size:15px}
+button{width:100%;margin-top:20px;padding:11px;border:0;border-radius:8px;background:var(--pri);color:#fff;font-size:15px;cursor:pointer}button:disabled{opacity:.6}
+.msg{margin-top:16px;padding:10px 12px;border-radius:8px;font-size:14px;display:none}.ok{background:#e8f5e9;color:#1b5e20}.er{background:#fdecea;color:#b71c1c}
+.ft{display:flex;justify-content:space-between;margin-top:18px;font-size:13px}a{color:var(--pri);text-decoration:none;cursor:pointer}
+</style></head><body><div class="c" id="c"></div>
+<script>
+(function(){
+let L=(localStorage.getItem("lang")||navigator.language||"zh-CN");const T=(z,e)=>/^zh/i.test(L)?z:e;
+const reset=location.pathname.endsWith("adoluna-reset"),tk=new URLSearchParams(location.search).get("t")||"";
+if(reset&&tk)history.replaceState(null,"",location.pathname); // keep the token out of history
+const c=document.getElementById("c");
+async function post(a,b){const r=await fetch("/_admin/adoluna-api/acct/"+a,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.assign({lang:L},b))});return [r.status,await r.json().catch(()=>({}))]}
+function msg(t,ok){const m=c.querySelector(".msg");m.className="msg "+(ok?"ok":"er");m.style.display="block";m.textContent=t}
+const foot=()=>'<div class="ft"><a href="/_admin/#/login">'+T("← 返回登录","← Back to sign in")+'</a><a id="lg">'+T("English","中文")+'</a></div>';
+function bind(){c.querySelector("#lg").onclick=()=>{L=/^zh/i.test(L)?"en":"zh-CN";try{localStorage.setItem("lang",L)}catch(e){}render()}}
+let valid=null;
+async function render(){
+ if(!reset){c.innerHTML='<h1>'+T("忘记密码","Forgot password")+'</h1><p>'+T("输入后台账号的邮箱，我们会发一封重设密码的邮件。","Enter the email on your admin account and we'll send you a password reset email.")+'</p>'+
+  '<form id="f"><label>'+T("邮箱","Email")+'</label><input id="em" type="email" autocomplete="email" required><button id="b">'+T("发送重设邮件","Send reset email")+'</button></form><div class="msg"></div>'+foot();bind();
+  c.querySelector("#f").onsubmit=async e=>{e.preventDefault();const b=c.querySelector("#b");b.disabled=true;const [s,j]=await post("forgot",{email:c.querySelector("#em").value});
+   if(s===200){msg(j.message,1)}else{msg(j.error||"Error");b.disabled=false}};return}
+ if(valid===null){valid=tk?(await post("check",{t:tk}))[1].valid:false}
+ if(!valid){c.innerHTML='<h1>'+T("链接无效","Link not valid")+'</h1><p>'+T("这个重设链接无效、已用过或已过期（30 分钟）。请重新申请。","This reset link is invalid, already used, or expired (30 minutes). Please ask for a new one.")+'</p><a href="/_admin/adoluna-forgot">'+T("重新申请","Ask for a new link")+'</a>'+foot();bind();return}
+ c.innerHTML='<h1>'+T("设置新密码","Set a new password")+'</h1><p>'+T("输入邮件里的 6 位验证码和新密码。新密码 8–32 位，需有大写、小写字母和数字。","Enter the 6-digit code from the email and a new password: 8-32 characters with upper- and lower-case letters and a number.")+'</p>'+
+  '<form id="f"><label>'+T("验证码","Code")+'</label><input id="cd" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required><label>'+T("新密码","New password")+'</label><input id="n1" type="password" autocomplete="new-password" required><label>'+T("再输入一次","Confirm new password")+'</label><input id="n2" type="password" autocomplete="new-password" required><button id="b">'+T("保存新密码","Save new password")+'</button></form><div class="msg"></div>'+foot();bind();
+ c.querySelector("#f").onsubmit=async e=>{e.preventDefault();const b=c.querySelector("#b");b.disabled=true;
+  const [s,j]=await post("reset",{t:tk,code:c.querySelector("#cd").value,new:c.querySelector("#n1").value,confirm:c.querySelector("#n2").value});
+  if(s===200){c.querySelector("#f").remove();msg(T("密码已更新，所有设备上的登录已退出。请用新密码登录。","Password updated and you were signed out everywhere. Sign in with your new password."),1)}else{msg(j.error||"Error");b.disabled=false}}}
+render()})();
+</script></body></html>
