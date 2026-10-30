@@ -148,6 +148,28 @@ def merch(self, path):
                             G.reissue(st, i)
                 G.save(st)
             res = {"moved": len(ids)}
+        elif act == "push":
+            # 一键推送密码 (Jay 10/30): selected devices get their merchant password again, or one new own password
+            ids = [str(x) for x in (q.get("ids") or []) if str(x).isdigit()][:500]
+            if not ids:
+                raise M.Err("ids")
+            need_tech([M.peer_store_id(i) for i in ids])
+            mode = q.get("mode", "merchant"); pw = q.get("password") or ""
+            if mode == "own" and not 8 <= len(pw) <= 64:
+                raise M.Err("pwlen")
+            pushed, skipped = [], []
+            with G.LOCK:
+                st = G.load()
+                for i in ids:
+                    if mode == "own":
+                        G.set_custom(st, i, pw, by); pushed.append(i)
+                    else:
+                        st.get("custom", {}).pop(i, None)
+                        (pushed if G.reissue(st, i) else skipped).append(i)
+                G.save(st)
+            for i in pushed:
+                M.log(by, i, "", "推送密码（单独密码）" if mode == "own" else "推送密码（商家密码）")
+            res = {"pushed": pushed, "skipped": skipped}
         elif act == "rename":
             need_tech([M.peer_store_id(q.get("id"))]); M.rename_device(str(q.get("id")), q.get("name"), by); res = {}
         elif act == "delete-devices":
@@ -179,6 +201,7 @@ def merch(self, path):
                "level": ("你的职位是只读，不能改这些设备", "Your position is view-only for these devices"),
                "name": ("请填写名称", "Enter a name"), "dup": ("这个名称已经有了", "That name is already used"),
                "pwlen": ("密码长度需 8–64 位", "Password must be 8–64 characters"),
+               "ids": ("请先选择设备", "Select devices first"),
                "has_devices": ("请先删除或移走 %s 台设备" % n, "Remove or move %s devices first" % n),
                "last_store": ("商家至少要留一家门店", "A merchant needs at least one store"),
                "self_admin": ("不能取消你自己的管理员", "You can't remove your own admin access"),

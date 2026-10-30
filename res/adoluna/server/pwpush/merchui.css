@@ -1,5 +1,6 @@
 /* Adoluna Support: merchant pages (Jay 2026-10-30) */
-body:not(.adm-set) .app-left .el-menu{display:none!important}
+.app-left .el-menu{display:none!important}
+.app-header .setting>.el-dropdown:has(.nickname){display:none!important}
 .app-left .el-menu{border-top:1px solid #2A2E35}
 #adm-nav{padding:6px 0;font-size:14px;color:#C9CDD3}
 #adm-nav .adm-ni{display:flex;align-items:center;justify-content:space-between;height:44px;padding:0 20px;cursor:pointer;border-left:3px solid transparent}
@@ -67,3 +68,19 @@ body:not(.adm-set) .app-left .el-menu{display:none!important}
 .adm-sw span{position:absolute;inset:0;background:#D1D5DB;border-radius:10px;cursor:pointer;transition:.15s}.adm-sw span:before{content:"";position:absolute;width:16px;height:16px;left:2px;top:2px;background:#fff;border-radius:50%;transition:.15s}
 .adm-sw input:checked+span{background:#FF2400}.adm-sw input:checked+span:before{transform:translateX(16px)}.adm-sw input:disabled+span{opacity:.5;cursor:not-allowed}
 .adm-cust{font-size:12px}
+/* menu simplify (Jay 10/30): user dropdown, log tabs, push dialog */
+#adm-um{position:relative;display:flex;align-items:center;margin-left:8px}
+#adm-um .adm-umb{display:flex;align-items:center;gap:8px;background:none;border:0;cursor:pointer;font-size:14px;color:inherit;padding:4px 6px;border-radius:6px}
+#adm-um .adm-umb:hover{background:rgba(0,0,0,.05)}
+#adm-um .adm-av{width:26px;height:26px;border-radius:50%;background:#FF2400;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}
+#adm-um .adm-umm{position:absolute;right:0;top:calc(100% + 6px);min-width:180px;background:#fff;border:1px solid #E6E8EB;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);z-index:3500;padding:4px 0;font-size:13px;color:#1F2329}
+#adm-um .adm-umm.hidden{display:none}
+#adm-um .adm-umm div[data-u]{padding:9px 14px;cursor:pointer;white-space:nowrap}#adm-um .adm-umm div[data-u]:hover{background:#FFF5F2}
+#adm-um .adm-umm .sep{border-top:1px solid #F0F1F3;margin:4px 0}#adm-um .adm-umm .danger{color:#C62828}
+#adm .adm-tabs{display:flex;gap:4px;margin:0 0 12px;border-bottom:1px solid #E6E8EB;flex-wrap:wrap}
+#adm .adm-tab{padding:9px 16px;cursor:pointer;font-size:14px;color:#646A73;border-bottom:2px solid transparent;margin-bottom:-1px}
+#adm .adm-tab:hover{color:#1F2329}#adm .adm-tab.on{color:#FF2400;border-bottom-color:#FF2400;font-weight:600}
+.adm-dlg .adm-ul{margin:4px 0 0;padding-left:18px;line-height:1.9}
+.adm-dlg .adm-kv{display:flex;justify-content:space-between;gap:16px;padding:8px 0;border-bottom:1px solid #F0F1F3}
+.adm-dlg .hidden{display:none}
+.adm-dlg input[type=password]{display:block;width:100%;margin-top:10px}
