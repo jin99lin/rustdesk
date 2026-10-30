@@ -53,6 +53,53 @@ def known_peer(dev_id):
     except Exception:
         return True  # never block a push just because the db is busy
 
+AB_WRITE = {"/api/admin/address_book/create", "/api/admin/address_book/batchCreate", "/api/admin/address_book/update",
+            "/api/admin/my/address_book/create", "/api/admin/my/address_book/update"}
+
+def ab_id_problem(path, body, zh):
+    """Jay 10/29: address-book entries must point at a device that exists in our system.
+    Returns an error message, or None. Fails open if the db can't be read."""
+    try:
+        q = json.loads(body or b"{}")
+    except Exception:
+        return None
+    dev = str(q.get("id", "")).strip()
+    try:
+        c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=2)
+        try:
+            if c.execute("select 1 from peers where id=? limit 1", (dev,)).fetchone():
+                return None
+            if path.endswith("/update") and q.get("row_id"):  # old entry kept its id: don't block editing it
+                r = c.execute("select id from address_books where row_id=?", (int(q["row_id"]),)).fetchone()
+                if r and str(r[0]) == dev:
+                    return None
+        finally:
+            c.close()
+    except Exception:
+        return None
+    return ("设备 ID %s 不在系统设备列表里，请从已有设备中选择" % dev) if zh else \
+        ("Device ID %s is not in the device list. Pick an existing device." % dev)
+
+def device_index():
+    """Compact list of every device with its store (device group) and address-book tags, for the admin search box."""
+    c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=3)
+    try:
+        tags = {}
+        for i, t in c.execute("select id, tags from address_books"):
+            try:
+                for x in json.loads(t or "[]") or []:
+                    tags.setdefault(str(i), set()).add(str(x))
+            except Exception:
+                pass
+        out = []
+        for i, h, a, o, lo, g in c.execute("select p.id, p.hostname, p.alias, p.os, p.last_online_time, coalesce(g.name,'') "
+                                         "from peers p left join device_groups g on g.id=p.group_id"):
+            out.append({"id": str(i), "hostname": h, "alias": a, "os": o, "last_online_time": lo or 0, "group": g,
+                        "tags": sorted(tags.get(str(i), ()))})
+        return out
+    finally:
+        c.close()
+
 def set_pw(st, pw, by):
     salt = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
     h = base64.b64encode(sha256((pw + salt).encode()).digest()).decode()
@@ -114,6 +161,10 @@ class H(BaseHTTPRequestHandler):
                 if bad:
                     return self.send(200, json.dumps({"code": 101, "message": bad, "data": None}, ensure_ascii=False).encode())
                 cur = ACC.uid_for_token(self.headers.get("api-token"))
+            if path0 in AB_WRITE and self.command == "POST":
+                bad = ab_id_problem(path0, body, not str(self.headers.get("Accept-Language", "zh")).lower().startswith("en"))
+                if bad:
+                    return self.send(200, json.dumps({"code": 101, "message": bad, "data": None}, ensure_ascii=False).encode())
         try:
             r, data = self.upstream(self.command, self.path, body, hdr)
         except Exception as e:
@@ -130,8 +181,8 @@ class H(BaseHTTPRequestHandler):
         if idx and r.status == 200 and b"</head>" in data and PEERUI:
             data = data.replace(b"<head>", b"<head><script>try{if(!localStorage.getItem('adoluna_lang_init')){localStorage.setItem('lang','zh-CN');"
                                 b"localStorage.setItem('adoluna_lang_init','1')}}catch(e){}</script>", 1)
-            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=3">'
-                                b'<script src="/_admin/adoluna-peerui.js?v=3" defer></script></head>', 1)
+            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=4">'
+                                b'<script src="/_admin/adoluna-peerui.js?v=4" defer></script></head>', 1)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
         if ent and r.status == 200 and PEERUI:  # admin build hides these menus; admins need Users (email, reset password)
             for a, b in UNHIDE:
@@ -192,6 +243,16 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, open(f, "rb").read(), ct, [("Cache-Control", "no-cache")])
         if path.startswith("/_admin/adoluna-api/acct/") or path in ("/_admin/adoluna-forgot", "/_admin/adoluna-reset"):
             return self.acct(path)
+        if path == "/_admin/adoluna-api/devices":
+            if not private(self.client_address[0]) or any(self.headers.get(h) and not all(private(x) for x in self.headers[h].split(","))
+                                                          for h in ("X-Forwarded-For", "X-Real-IP")):
+                return self.send(403, b'{"error":"forbidden"}')
+            if not ACC.uid_for_token(self.headers.get("api-token", "")):
+                return self.send(403, json.dumps({"error": "login"}).encode())
+            try:
+                return self.send(200, json.dumps({"list": device_index()}, ensure_ascii=False).encode(), extra=[("Cache-Control", "no-store")])
+            except Exception:
+                return self.send(503, b'{"error":"db busy"}')
         if path == "/_admin/adoluna-api/reset":
             if self.command != "POST" or not self.admin_ok():
                 return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台"}).encode())

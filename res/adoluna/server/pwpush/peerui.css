@@ -32,3 +32,19 @@
 .app-header .setting .menu-item .title svg{color:inherit !important}
 #adp-forgot{text-align:right;margin-top:8px;font-size:13px}#adp-forgot a{color:var(--el-color-primary);text-decoration:none}
 #adp-mc input{display:block;width:100%;box-sizing:border-box;margin-top:10px}
+/* 20261029 batch: address books like Devices, device picker, live filters */
+.adp-chip{display:inline-block;font-size:12px;padding:1px 8px;border-radius:10px;background:#F1F2F4;color:#374151;margin:1px 0}
+#adp .f #adp-tags{display:flex;flex-wrap:wrap;gap:6px 12px}.adp-ck{display:inline-flex;align-items:center;gap:4px;color:#1F2328!important;text-align:left!important}
+#adp .f .adp-ck input{width:auto;height:auto}
+.adp-dlg.wide{width:600px;top:12%}.adp-dlg .adp-pq{margin-top:0}
+.adp-pl{border:1px solid #E6E8EB;border-radius:8px;margin-top:8px;max-height:330px;overflow:auto}
+.adp-pi{display:grid;grid-template-columns:120px 1fr 160px 110px;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid #F0F1F3;cursor:pointer;font-size:13px}
+.adp-pi:last-child{border-bottom:0}.adp-pi:hover{background:#FFF5F2}.adp-pi.on{background:#FFE9E3}.adp-pi .g{color:#6B7280;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.adp-pi .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adp-f2{display:grid;grid-template-columns:80px 1fr;gap:10px 12px;align-items:center;margin-top:12px}.adp-f2 label{color:#6B7280;text-align:right}
+.adp-f2 select,.adp-f2 input{width:100%;box-sizing:border-box;height:32px;border:1px solid #DCDFE4;border-radius:6px;padding:0 10px;margin:0;background:#fff}
+.list-query .el-form--inline.adp-af{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px}
+.list-query .el-form--inline.adp-af .el-form-item{margin:0!important}
+.list-query .el-form--inline.adp-af .el-form-item__label{width:auto!important;white-space:nowrap}
+.list-query .el-form--inline.adp-af .el-form-item:has(button){margin-left:auto!important}
+.list-query .el-form--inline.adp-af .el-form-item:has(button) .el-form-item__content{display:flex;flex-wrap:nowrap;gap:8px}
+.list-query .el-form--inline.adp-af .el-form-item:has(button) .el-button{margin-left:0!important}
