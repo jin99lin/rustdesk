@@ -21,11 +21,11 @@
 #adm .adm-btns{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 #adm input,#adm select,.adm-dlg select{border:1px solid var(--bd,#DCDFE4);border-radius:6px;padding:0 10px;height:32px;font-size:14px;font-family:inherit;box-sizing:border-box;background:#fff}
 #adm input[type=checkbox],#adm input[type=radio],.adm-dlg input[type=checkbox],.adm-dlg input[type=radio]{height:auto;width:auto;margin:0 4px 0 0;vertical-align:-2px;accent-color:#FF2400}
-#adm .btn,.adm-dlg .btn{border:1px solid #DCDFE4;background:#fff;color:#374151;border-radius:6px;height:32px;padding:0 14px;cursor:pointer;font-size:14px;font-family:inherit;display:inline-flex;align-items:center;gap:4px;text-decoration:none;white-space:nowrap}
-#adm .btn.sm,.adm-dlg .btn.sm{height:28px;padding:0 10px;font-size:13px}
+#adm .btn,.adm-dlg .btn,#adm-dr .btn{border:1px solid #DCDFE4;background:#fff;color:#374151;border-radius:6px;height:32px;padding:0 14px;cursor:pointer;font-size:14px;font-family:inherit;display:inline-flex;align-items:center;gap:4px;text-decoration:none;white-space:nowrap}
+#adm .btn.sm,.adm-dlg .btn.sm,#adm-dr .btn.sm{height:28px;padding:0 10px;font-size:13px}
 #adm .btn.on{border-color:#FF2400;color:#FF2400;background:#FFF5F2}
-#adm .pri,.adm-dlg .pri{background:#FF2400;border-color:#FF2400;color:#fff}#adm .btn:disabled,.adm-dlg .btn:disabled{opacity:.45;cursor:not-allowed}
-#adm .rr{color:#FF2400;border-color:#FF2400}#adm .danger-o,.adm-dlg .danger-o{color:#C62828;border-color:#F3B5B5}.adm-dlg .pri.danger{background:#C62828;border-color:#C62828}
+#adm .pri,.adm-dlg .pri{background:#FF2400;border-color:#FF2400;color:#fff}#adm .btn:disabled,.adm-dlg .btn:disabled,#adm-dr .btn:disabled{opacity:.45;cursor:not-allowed}
+#adm .rr{color:#FF2400;border-color:#FF2400}#adm .danger-o,.adm-dlg .danger-o,#adm-dr .danger-o{color:#C62828;border-color:#F3B5B5}.adm-dlg .pri.danger{background:#C62828;border-color:#C62828}
 #adm table{width:100%;border-collapse:collapse}#adm th{background:#F6F7F9;color:#6B7280;text-align:left;font-weight:500;padding:9px 12px;border-bottom:1px solid var(--bl);font-size:13px;white-space:nowrap}
 #adm td{padding:10px 12px;border-bottom:1px solid #F0F1F3;vertical-align:middle}#adm tr.r:hover td{background:#FFF8F6;cursor:pointer}
 #adm th.ck,#adm td.ck{width:28px;padding-right:0}#adm .act{text-align:right;white-space:nowrap}
@@ -53,7 +53,7 @@
 .adm-menu{position:absolute;width:200px;background:#fff;border:1px solid #E6E8EB;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.14);z-index:3500;padding:4px 0;font-size:13px}
 .adm-menu div{padding:8px 14px;cursor:pointer}.adm-menu div:hover{background:#FFF5F2}.adm-menu .danger{color:#C62828;border-top:1px solid #F0F1F3}
 .adm-dlg{width:460px;max-height:80vh;overflow:auto;top:16%!important}.adm-dlg.wide{width:600px}
-.adm-dlg .adm-l,#adm .adm-l{display:block;font-size:13px;color:#374151;margin:12px 0 4px;font-weight:500}
+.adm-dlg .adm-l,#adm-dr .adm-l,#adm .adm-l{display:block;font-size:13px;color:#374151;margin:12px 0 4px;font-weight:500}
 .adm-dlg .adm-l+input{margin-top:0}.adm-dlg .adm-dfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
 .adm-dlg .adm-row{display:flex;gap:6px;align-items:center}.adm-dlg .adm-row input{margin-top:0;flex:1}
 .adm-pp{display:flex;flex-wrap:wrap;gap:6px}.adm-ck{display:inline-flex;align-items:center;gap:2px;border:1px solid #E6E8EB;border-radius:14px;padding:3px 10px;font-size:13px;cursor:pointer}.adm-ck.on{border-color:#FF2400;background:#FFF5F2}
@@ -120,3 +120,23 @@ html.adm-col #adm-nav .adm-badge{position:absolute;left:34px;top:9px;min-width:0
 #adm tr.adm-off td{color:#9CA3AF;background:#FAFAFB}#adm tr.adm-off b{color:#9CA3AF}
 .adm-offc{font-size:12px;padding:1px 7px;border-radius:4px;background:#ECEDEF;color:#6B7280;white-space:nowrap}
 #adm .adm-mem .btn{margin-left:8px}
+/* batch 6 (Jay 10/31): device detail drawer, replaces the "⋯" row menu */
+#adm tr.adm-clk{cursor:pointer}#adm tr.adm-clk:hover td{background:#FFF8F6}#adm tr.adm-clk.sel td{background:#FFF1EC}
+#adm-drm{position:fixed;inset:0;z-index:2990;background:rgba(17,24,39,.08)}
+#adm-dr{position:fixed;top:0;right:0;bottom:0;width:460px;max-width:92vw;z-index:2995;background:#fff;border-left:1px solid #E5E7EB;box-shadow:-12px 0 32px rgba(0,0,0,.10);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .18s ease;font-size:14px;color:#1F2328}
+#adm-dr.on{transform:none}
+#adm-dr .adm-dr-h{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #E6E8EB;font-size:16px}
+#adm-dr .adm-x{border:0;background:none;cursor:pointer;color:#5F6670;padding:4px;border-radius:6px;display:flex}#adm-dr .adm-x:hover{background:#F3F4F6}
+#adm-dr .adm-dr-b{flex:1;overflow:auto;padding:4px 18px 24px}
+#adm-dr section{padding:14px 0;border-bottom:1px solid #F0F1F3}#adm-dr section:last-child{border-bottom:0}
+#adm-dr h5{margin:0 0 10px;font-size:13px;font-weight:600;color:#6B7280;text-transform:none}
+#adm-dr .adm-kv{display:flex;justify-content:space-between;gap:12px;padding:4px 0;font-size:13px}#adm-dr .adm-kv>span:last-child{text-align:right}
+#adm-dr .adm-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0}
+#adm-dr .adm-nmr{display:flex;gap:8px;margin-bottom:8px}#adm-dr .adm-nmr input{flex:1}
+#adm-dr input,#adm-dr select{border:1px solid #DCDFE4;border-radius:6px;padding:0 10px;height:32px;font-size:14px;font-family:inherit;box-sizing:border-box;background:#fff}
+#adm-dr .adm-warn{display:flex;gap:8px;align-items:flex-start;background:#FEF3E2;color:#92400E;border:1px solid #FCD9A8;border-radius:6px;padding:8px 10px;margin:8px 0;font-size:13px}#adm-dr .adm-warn .adm-ic{flex:none;margin-top:1px}
+#adm-dr .adm-who>div{padding:6px 0;border-bottom:1px dashed #EEF0F2}#adm-dr .adm-who>div:last-child{border-bottom:0}
+#adm-dr .adm-rt{width:100%;border-collapse:collapse;font-size:12px}#adm-dr .adm-rt td{padding:6px 4px;border-bottom:1px solid #F3F4F6;vertical-align:top}#adm-dr .adm-rt td:first-child{white-space:nowrap;color:#6B7280}
+#adm-dr .adm-err{color:#C62828}
+#adm-dr .adm-dz{padding-top:18px}#adm-dr .adm-dz .btn{display:inline-flex;align-items:center;gap:6px}
+#adm-dr .adm-hint{font-size:12px;color:#6B7280;line-height:1.5}

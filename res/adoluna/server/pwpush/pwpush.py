@@ -469,7 +469,7 @@ class H(BaseHTTPRequestHandler):
                                 b"localStorage.setItem('adoluna_lang_init','1')}}catch(e){}</script>", 1)
             data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=9">'
                                 b'<script src="/_admin/adoluna-peerui.js?v=9" defer></script>'
-                                b'<link rel="stylesheet" href="/_admin/adoluna-merchui.css?v=5"><script src="/_admin/adoluna-merchui.js?v=5" defer></script></head>', 1)
+                                b'<link rel="stylesheet" href="/_admin/adoluna-merchui.css?v=6"><script src="/_admin/adoluna-merchui.js?v=6" defer></script></head>', 1)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
         if ent and r.status == 200 and PEERUI:  # admin build hides these menus; admins need Users (email, reset password)
             for a, b in UNHIDE:
@@ -615,8 +615,10 @@ class H(BaseHTTPRequestHandler):
         if path == "/_admin/adoluna-api/grant":
             if q.get("delete"):
                 with acl() as c:
+                    g = c.execute("select subj_kind, subj, tgt_kind, tgt from grants where id=?", (int(q["delete"]),)).fetchone()
                     c.execute("delete from grants where id=?", (int(q["delete"]),))
-                audit("(后台)", "", "", by, f"删除授权 #{int(q['delete'])}")
+                audit("(后台)", "", g[3] if g and g[2] == "peer" else "", by,
+                      f"删除授权 #{int(q['delete'])}" + (f" {g[0]}:{g[1]} -> {g[2]}:{g[3]}" if g else ""))
                 return self.send(200, b'{"ok":true}')
             sk, sv, tk, tv = (str(q.get(k, "")).strip() for k in ("subj_kind", "subj", "tgt_kind", "tgt"))
             if sk not in ("user", "group") or tk not in ("peer", "dgroup") or not sv.isdigit() or not tv.isdigit():

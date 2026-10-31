@@ -349,17 +349,17 @@ def assign(ids, sid, by):
             prev[str(i)] = o[0]
             db.execute("update peers set group_id=?, updated_at=? where id=?", (g, ts(), str(i)))
         db.commit(); db.close()
-        if sid is not None and pwless:  # passwordless is on for this merchant: make sure the device accepts it
+        dflt = []
+        if sid is not None:  # batch 6 (Jay 10/31): merchant devices default to passwordless ON; an explicit role (on or off) is kept
             for i in prev:
-                x = c.execute("select accept, ctrl_only, ts from roles where peer_id=?", (i,)).fetchone()
-                if x and x[1]:
-                    continue  # controller-only devices stay as they are
-                if not x or not x[0]:
-                    t = max(int(time.time()), (x[2] + 1) if x else 0)
-                    c.execute("insert or replace into roles(peer_id, accept, ctrl_only, ts, updated_by) values(?,1,0,?,?)", (i, t, by))
+                if not c.execute("select 1 from roles where peer_id=?", (i,)).fetchone():
+                    c.execute("insert into roles(peer_id, accept, ctrl_only, ts, updated_by) values(?,1,0,?,?)", (i, int(time.time()), by))
+                    dflt.append(i)
         c.commit(); c.close(); bust()
     for i in prev:
         log(by, i, "", "分配到门店 #%s" % sid if sid else "移回待分配")
+    for i in dflt:
+        log(by, i, "", "默认开启账号免密登录")
     return prev
 
 def rename_device(pid, name, by):

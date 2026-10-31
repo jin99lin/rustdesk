@@ -69,6 +69,58 @@ def overview(G, uid, adm):
             "positions": pos if adm else [], "users": [{k: u[k] for k in ("id", "username", "nickname", "email", "is_admin", "status")} for u in users] if adm else [],
             "unassigned": sum(1 for d in devs if d["store_id"] is None)}
 
+def device_detail(G, uid, adm, pid):
+    """batch 6 (Jay 10/31): one device for the detail drawer: role, who can connect password-free and why, recent records"""
+    pid = str(pid or "")
+    if not pid.isdigit():
+        return None
+    c = M.md(); stores = M.stores_all(c); pos = M.positions_all(c); acc = M.access(uid, adm, c, stores, pos)
+    sid = M.peer_store_id(pid); s = next((x for x in stores if x["id"] == sid), None)
+    if s and sid not in acc:
+        return None
+    if not s and not adm and not any(v >= 2 for v in acc.values()):
+        return None
+    if not G.known_peer(pid):
+        return None
+    r = c.execute("select accept, ctrl_only, ts, updated_by from roles where peer_id=?", (pid,)).fetchone()
+    m = c.execute("select id, name, pwless from merchants where id=?", (s["merchant_id"],)).fetchone() if s else None
+    users = {u["id"]: u for u in M.users_all()}
+    who = {}
+    def add(u, src):
+        x = users.get(u)
+        if x and x["status"] == 1:
+            who.setdefault(u, {"id": u, "username": x["username"], "nickname": x["nickname"] or "", "via": []})["via"].append(src)
+    for u in users.values():
+        if u["is_admin"]:
+            add(u["id"], {"kind": "admin"})
+    if s and m and m[2]:  # merchant model (granted() in merchants.py)
+        for p in pos:
+            if sid in M.pos_stores(p, stores):
+                for u in p["members"]:
+                    add(u, {"kind": "position", "position": p["name"], "position_id": p["id"], "store": s["name"], "merchant": m[1]})
+    grants = []
+    gid = str(s["dgroup_id"]) if s else ""
+    groups = {}
+    try:
+        ro = M.ro(); groups = {str(i): n for i, n in ro.execute("select id, name from groups")}; ro.close()
+    except Exception:
+        pass
+    for gi, sk, sv, tk, tv in c.execute("select id, subj_kind, subj, tgt_kind, tgt from grants"):
+        if (tk == "peer" and tv == pid) or (tk == "dgroup" and gid and tv == gid):
+            g = {"id": gi, "subj_kind": sk, "subj": sv, "tgt_kind": tk,
+                 "label": (users.get(int(sv)) or {}).get("username", "#" + sv) if sk == "user" and sv.isdigit() else groups.get(sv, "#" + sv)}
+            grants.append(g)
+            for u in users.values():
+                if (sk == "user" and sv == str(u["id"])) or (sk == "group" and sv == str(u.get("group_id"))):
+                    add(u["id"], {"kind": "grant", "grant_id": gi, "subj_kind": sk, "label": g["label"], "tgt_kind": tk})
+    recent = [dict(zip(("ts", "user", "my_id", "ip", "result"), x)) for x in
+              c.execute("select ts, user, my_id, ip, result from audit where peer_id=? order by id desc limit 10", (pid,))]
+    c.close()
+    return {"id": pid, "store_id": sid, "merchant_pwless": bool(m and m[2]) if s else None,
+            "role": {"exists": bool(r), "accept": r[0] if r else 0, "ctrl_only": r[1] if r else 0, "ts": r[2] if r else 0,
+                     "updated_by": r[3] if r else ""},
+            "who": sorted(who.values(), key=lambda x: x["username"].lower()), "grants": grants, "recent": recent}
+
 def merch(self, path):
     G = _ctx(self); tr = self.tr
     if not _ip_ok(self, G):
@@ -85,6 +137,11 @@ def merch(self, path):
                 rows = [dict(zip(("ts", "user", "peer_id", "ip", "result"), r)) for r in
                         c.execute("select ts, user, peer_id, ip, result from audit order by id desc limit 300")]
             return self.jout(200, {"items": rows})
+        if act.startswith("device"):
+            from urllib.parse import urlparse, parse_qs
+            pid = (parse_qs(urlparse(self.path).query).get("id") or [""])[0]
+            r = device_detail(G, uid, adm, pid)
+            return self.jout(200, r) if r else self.jout(404, {"error": tr("找不到这台设备（可能已删除，或你没有权限）", "Device not found (deleted, or no access)")})
         return self.jout(404, {})
     q = self.body_json() or {}
     acc = M.access(uid, adm)
