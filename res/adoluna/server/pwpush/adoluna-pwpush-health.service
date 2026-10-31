@@ -1,0 +1,6 @@
+[Unit]
+Description=Adoluna pwpush sidecar health check (restart if hung)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/rustdesk/pwpush/pwpush-health.sh

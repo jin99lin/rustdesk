@@ -157,7 +157,7 @@ def device_index():
 
 # ---- passwordless: grants / device roles / audit ----
 def acl():
-    c = sqlite3.connect(ACL_DB, timeout=5)
+    c = sqlite3.connect(ACL_DB, timeout=5, factory=M.ClosingConn)  # closes on with-exit (fd leak fix, see merchants.py)
     c.executescript("""
       create table if not exists grants(id integer primary key, subj_kind text not null, subj text not null,
         tgt_kind text not null, tgt text not null, created_at integer, created_by text,
@@ -393,6 +393,7 @@ def seen_all():
 
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    timeout = int(os.environ.get("PW_SOCK_TIMEOUT", "30"))  # idle/slow client socket timeout (keep-alive, slow body)
     def log_message(self, fmt, *a):
         if "/_admin/adoluna" in self.path:
             sys.stderr.write("%s %s\n" % (self.address_string(), fmt % a))
@@ -836,7 +837,23 @@ class H(BaseHTTPRequestHandler):
 
     from merch_api import merch  # merchant pages API (merch_api.py)
 
+    def health(self):
+        """Watchdog probe: proves the accept loop answers and that we can still open files (the fd-leak hang)."""
+        try:
+            with acl() as c:
+                c.execute("select 1").fetchone()
+            ro = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=2)
+            try:
+                ro.execute("select 1").fetchone()
+            finally:
+                ro.close()
+            return self.send(200, b'{"ok":true}')
+        except Exception as e:
+            return self.send(503, json.dumps({"ok": False, "error": type(e).__name__}).encode())
+
     def handle_any(self):
+        if self.path.split("?")[0] == "/_adoluna/health":
+            return self.health()
         if self.path.split("?")[0] == "/api/adoluna/ticket":
             return self.ticket()
         if self.path.startswith("/_admin/adoluna"):

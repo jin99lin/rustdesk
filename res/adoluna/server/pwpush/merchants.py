@@ -24,8 +24,18 @@ def rw():
 def ro():
     return sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=5)
 
+class ClosingConn(sqlite3.Connection):
+    """sqlite3's own `with conn:` only commits/rolls back and never closes, so every `with md() as c:` leaked one
+    file descriptor.  After ~1000 the sidecar hit EMFILE ("unable to open database file", sockets stuck in CLOSE-WAIT)
+    and hung (2026-10-31 morning).  This connection closes itself when the with-block ends."""
+    def __exit__(self, et, ev, tb):
+        try:
+            return super().__exit__(et, ev, tb)
+        finally:
+            self.close()
+
 def md():
-    c = sqlite3.connect(MDB, timeout=10)
+    c = sqlite3.connect(MDB, timeout=10, factory=ClosingConn)
     c.executescript("""
       create table if not exists merchants(id integer primary key, name text not null, address text not null default '',
         pwless integer not null default 1, created_at integer, created_by text);
