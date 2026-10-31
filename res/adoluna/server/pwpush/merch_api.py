@@ -98,6 +98,18 @@ def device_detail(G, uid, adm, pid):
             if sid in M.pos_stores(p, stores):
                 for u in p["members"]:
                     add(u, {"kind": "position", "position": p["name"], "position_id": p["id"], "store": s["name"], "merchant": m[1]})
+    def uinfo(u):
+        x = users[u]; return {"id": u, "username": x["username"], "nickname": x["nickname"] or ""}
+    admins = sorted([uinfo(u["id"]) for u in users.values() if u["is_admin"] and u["status"] == 1], key=lambda x: x["username"].lower())
+    pgroups = []
+    if s and m and m[2]:
+        for p in pos:
+            if sid in M.pos_stores(p, stores):
+                k = [a["kind"] for a in p["access"]]
+                via = "store" if any(a["kind"] == "store" and a["ref"] == sid for a in p["access"]) else \
+                      "merchant" if any(a["kind"] == "merchant" and a["ref"] == s["merchant_id"] for a in p["access"]) else "all"
+                mem = [uinfo(u) for u in p["members"] if u in users and users[u]["status"] == 1]
+                pgroups.append({"id": p["id"], "name": p["name"], "level": p["level"], "via": via, "members": mem})
     grants = []
     gid = str(s["dgroup_id"]) if s else ""
     groups = {}
@@ -119,7 +131,8 @@ def device_detail(G, uid, adm, pid):
     return {"id": pid, "store_id": sid, "merchant_pwless": bool(m and m[2]) if s else None,
             "role": {"exists": bool(r), "accept": r[0] if r else 0, "ctrl_only": r[1] if r else 0, "ts": r[2] if r else 0,
                      "updated_by": r[3] if r else ""},
-            "who": sorted(who.values(), key=lambda x: x["username"].lower()), "grants": grants, "recent": recent}
+            "who": sorted(who.values(), key=lambda x: x["username"].lower()), "grants": grants,
+            "admins": admins, "positions": pgroups, "store": s["name"] if s else "", "merchant": m[1] if m else "", "recent": recent}
 
 def merch(self, path):
     G = _ctx(self); tr = self.tr

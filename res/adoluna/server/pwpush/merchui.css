@@ -140,3 +140,6 @@ html.adm-col #adm-nav .adm-badge{position:absolute;left:34px;top:9px;min-width:0
 #adm-dr .adm-err{color:#C62828}
 #adm-dr .adm-dz{padding-top:18px}#adm-dr .adm-dz .btn{display:inline-flex;align-items:center;gap:6px}
 #adm-dr .adm-hint{font-size:12px;color:#6B7280;line-height:1.5}
+#adm-dr .adm-grp{border:1px solid #EEF0F2;border-radius:6px;margin:6px 0}#adm-dr .adm-grp summary{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;list-style:none}
+#adm-dr .adm-grp summary::-webkit-details-marker{display:none}#adm-dr .adm-grp summary:before{content:"▸";color:#9CA3AF;margin-right:2px}#adm-dr .adm-grp[open] summary:before{content:"▾"}#adm-dr .adm-grp summary>span:first-child{flex:1}
+#adm-dr .adm-gm{padding:0 10px 10px 24px;display:flex;flex-wrap:wrap;gap:4px}
