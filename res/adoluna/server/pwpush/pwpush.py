@@ -895,4 +895,12 @@ if __name__ == "__main__":
     except Exception as e:
         sys.stderr.write("reconcile at start failed: %s\n" % e)
     M.loop(int(os.environ.get("PW_RECONCILE", "60")))
+    # Python 3.13+ sqlite3 connections sit in reference cycles, so a connection that is not closed explicitly
+    # (many `c = md()` read paths) keeps its file descriptor until the cyclic GC runs, which in this quiet process
+    # can take hours -> EMFILE hang (2026-10-31).  Collect regularly so fds are released within ~30 s.
+    import gc
+    def _gc_loop():
+        while True:
+            time.sleep(30); gc.collect()
+    threading.Thread(target=_gc_loop, daemon=True, name="gc").start()
     ThreadingHTTPServer(LISTEN, H).serve_forever()
