@@ -30,6 +30,12 @@ class BootReceiver : BroadcastReceiver() {
             "android.intent.action.REBOOT", Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_USER_PRESENT
         )
         if (intent.action in bootActions) {
+            // Adoluna DO test: re-apply DO setup and relaunch kiosk app on boot.
+            val isOwner = AdolunaDO.isOwner(context)
+            if (isOwner && intent.action != Intent.ACTION_USER_PRESENT) {
+                AdolunaDO.setup(context)
+                AdolunaDO.launchKiosk(context)
+            }
             // Adoluna: fallback actions may fire repeatedly; only start once per process.
             if (started || MainService.isStart) {
                 Log.d(logTag, "already started by boot receiver")
@@ -49,7 +55,8 @@ class BootReceiver : BroadcastReceiver() {
             if (!XXPermissions.isGranted(context, REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)) {
                 Log.w(logTag, "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is not granted, starting anyway")
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            // Device Owner is exempt from background-activity-start limits, so no overlay needed.
+            if (!isOwner && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
                 !XXPermissions.isGranted(context, SYSTEM_ALERT_WINDOW)) {
                 Log.d(logTag, "SYSTEM_ALERT_WINDOW is not granted (required on Android 10+)")
                 return

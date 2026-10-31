@@ -18,6 +18,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!--Adoluna DO test: PackageInstaller session install-->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <queries>
         <intent>
@@ -32,6 +34,33 @@
         android:label="Adoluna Support"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true">
+
+        <!--Adoluna DO TEST build: device admin / owner-->
+        <receiver
+            android:name=".AdolunaAdminReceiver"
+            android:exported="true"
+            android:label="Adoluna Support"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".AdolunaDOReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.adoluna.support.TEST_SETUP" />
+                <action android:name="com.adoluna.support.TEST_INSTALL" />
+                <action android:name="com.adoluna.support.TEST_KIOSK" />
+                <action android:name="com.adoluna.support.TEST_KIOSK_CLEAR" />
+                <action android:name="com.adoluna.support.TEST_CLEAR_DO" />
+            </intent-filter>
+        </receiver>
+        <!--result callback from PackageInstaller (explicit PendingIntent, not exported)-->
+        <receiver android:name=".AdolunaInstallResult" android:exported="false" />
 
         <receiver
             android:name=".BootReceiver"
