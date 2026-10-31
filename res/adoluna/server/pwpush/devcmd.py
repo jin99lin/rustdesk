@@ -63,6 +63,23 @@ def validate(k, p):
             return "brightness must be -1..255"
     return None
 
+def capability_error(c, dev, k):
+    """Refuse actions the device reported it can't do (Win7/8, Home kiosk) instead of failing on the device."""
+    r = c.execute("select info from dev_info where peer_id=?", (dev,)).fetchone()
+    try:
+        cap = (json.loads(r[0]) if r else {}).get("cap")
+    except Exception:
+        cap = None
+    if not isinstance(cap, dict):
+        return None
+    if k == "install" and not cap.get("install"):
+        return "push install not supported: " + str(cap.get("reason") or "")
+    if k == "kiosk_lock" and cap.get("kiosk") == "none":
+        return "single-app lock not supported: " + str(cap.get("reason") or "")
+    if k in ("update", "reboot") and cap.get("reason") == "os_unsupported":
+        return "not supported on this Windows version"
+    return None
+
 def queue(c, dev, k, p, by, now=None):
     now = int(now or time.time())
     ps = json.dumps(p, separators=(",", ":"), sort_keys=True)
@@ -127,6 +144,14 @@ def on_heartbeat(c, key, q, now=None):
         c.execute("update dev_cmds set delivered_at=coalesce(delivered_at,?) where id=?", (now, n))
     return out
 
+def os_label(i):
+    w = i.get("win") if isinstance(i, dict) else None
+    if isinstance(w, dict) and w.get("major"):
+        b = str(w.get("build") or "") + ("." + str(w["ubr"]) if w.get("ubr") else "")
+        return " ".join(x for x in ("Windows " + w["major"], w.get("edition") or "", w.get("display_version") or "",
+                                     "(" + b + ")" if b else "") if x)
+    return str((i or {}).get("os") or "")
+
 def summary(c):
     """Badge data for the device list: {peer_id: {...}}."""
     out = {}
@@ -136,7 +161,8 @@ def summary(c):
         except Exception:
             i = {}
         out[pid] = {"do": bool(i.get("is_owner")), "kiosk": bool(i.get("kiosk")), "platform": platform_of(i),
-                    "kiosk_capable": bool(i.get("kiosk_capable")), "ts": ts}
+                    "kiosk_capable": bool(i.get("kiosk_capable")), "os_label": os_label(i),
+                    "cap": i.get("cap") if isinstance(i.get("cap"), dict) else None, "ts": ts}
     return out
 
 def detail(c, dev):

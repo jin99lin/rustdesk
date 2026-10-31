@@ -66,6 +66,18 @@ class Unit(unittest.TestCase):
         self.assertEqual(b, [])
         self.assertEqual(D.on_heartbeat(self.c, self.k, {"id": "2", "adoluna_cmd_n": 0, "adoluna_dev": {"sdk": 30}}), [])
 
+    def test_windows_caps(self):
+        old = {"platform": "windows", "win": {"major": "7", "edition": "Other", "build": "7601"}, "cap": {"install": False, "kiosk": "none", "reason": "os_unsupported"}}
+        home = {"platform": "windows", "win": {"major": "11", "edition": "Home", "build": "22631", "ubr": "4317", "display_version": "23H2"}, "cap": {"install": True, "kiosk": "none", "reason": "needs_pro"}}
+        D.on_heartbeat(self.c, self.k, {"id": "7", "adoluna_cmd_n": 0, "adoluna_dev": old})
+        D.on_heartbeat(self.c, self.k, {"id": "8", "adoluna_cmd_n": 0, "adoluna_dev": home})
+        self.assertTrue(D.capability_error(self.c, "7", "install"))
+        self.assertTrue(D.capability_error(self.c, "7", "reboot"))
+        self.assertIsNone(D.capability_error(self.c, "8", "install"))
+        self.assertTrue(D.capability_error(self.c, "8", "kiosk_lock"))
+        self.assertIsNone(D.capability_error(self.c, "9", "kiosk_lock"))  # unknown device: allowed (device decides)
+        self.assertEqual(D.summary(self.c)["8"]["os_label"], "Windows 11 Home 23H2 (22631.4317)")
+
     def test_summary_badge(self):
         D.on_heartbeat(self.c, self.k, {"id": "7", "adoluna_cmd_n": 0, "adoluna_dev": {"is_owner": True, "sdk": 30, "kiosk": False}})
         self.assertEqual(D.summary(self.c)["7"]["do"], True)

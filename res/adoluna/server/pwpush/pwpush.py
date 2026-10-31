@@ -593,7 +593,7 @@ class H(BaseHTTPRequestHandler):
                     n = D.new_otp_secret(c, dev, by)
                     sys.stderr.write("dev-cmd %s otp_secret n=%s by %s\n" % (dev, n, by))
                     return self.send(200, json.dumps({"n": n}).encode())
-                err = D.validate(k, p)
+                err = D.validate(k, p) or D.capability_error(c, dev, k)
                 if err:
                     return self.send(400, json.dumps({"error": err}).encode())
                 n = D.queue(c, dev, k, p, by)
