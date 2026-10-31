@@ -60,22 +60,24 @@ enum SettingsTabKey {
 
 class DesktopSettingPage extends StatefulWidget {
   final SettingsTabKey initialTabkey;
-  static final List<SettingsTabKey> tabKeys = [
-    if (bind.mainGetBuildinOption(key: kOptionHideGeneralSetting) != 'Y')
+  // Adoluna b79: merchants see General (theme/language), Display and About only; staff unlock
+  // (tap the version 7x in About) reveals the rest for this session.
+  static List<SettingsTabKey> get tabKeys => [
+    if (!adolunaHide(kOptionHideGeneralSetting))
       SettingsTabKey.general,
     if (!isWeb &&
         !bind.isOutgoingOnly() &&
         !bind.isDisableSettings() &&
-        bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
+        !adolunaHide(kOptionHideSecuritySetting))
       SettingsTabKey.safety,
     if (!bind.isDisableSettings() &&
-        bind.mainGetBuildinOption(key: kOptionHideNetworkSetting) != 'Y')
+        !adolunaHide(kOptionHideNetworkSetting))
       SettingsTabKey.network,
     if (!bind.isIncomingOnly()) SettingsTabKey.display,
-    if (!bind.isDisableAccount()) SettingsTabKey.account,
+    if (!bind.isDisableAccount() && adolunaStaff.value) SettingsTabKey.account,
     if (isWindows &&
         !bind.isDisableSettings() &&
-        bind.mainGetBuildinOption(key: kOptionHideRemotePrinterSetting) != 'Y')
+        !adolunaHide(kOptionHideRemotePrinterSetting))
       SettingsTabKey.printer,
     SettingsTabKey.about,
   ];
@@ -273,6 +275,8 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    return Obx(() {
+    adolunaStaff.value; // rebuild when staff settings are unlocked
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
       body: _buildBlock(
@@ -300,6 +304,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         ],
       ),
     );
+    });
   }
 
   Widget _header(BuildContext context) {
@@ -412,14 +417,14 @@ class _GeneralState extends State<_General> {
     return ListView(
       controller: scrollController,
       children: [
-        if (!isWeb) service(),
+        if (!isWeb && adolunaStaff.value) service(),
         theme(),
         _Card(title: 'Language', children: [language()]),
-        if (!isWeb) hwcodec(),
-        if (!isWeb) audio(context),
-        if (!isWeb) record(context),
-        if (!isWeb) WaylandCard(),
-        other()
+        if (!isWeb && adolunaStaff.value) hwcodec(),
+        if (!isWeb && adolunaStaff.value) audio(context),
+        if (!isWeb && adolunaStaff.value) record(context),
+        if (!isWeb && adolunaStaff.value) WaylandCard(),
+        if (adolunaStaff.value) other()
       ],
     ).marginOnly(bottom: _kListViewBottomMargin);
   }
@@ -2539,7 +2544,8 @@ class _AboutState extends State<_About> {
               const SizedBox(
                 height: 8.0,
               ),
-              SelectionArea(
+              GestureDetector(
+                  onTap: adolunaVersionTap,
                   child: Text('${translate('Version')}: $version')
                       .marginSymmetric(vertical: 4.0)),
               SelectionArea(

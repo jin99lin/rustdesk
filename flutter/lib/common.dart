@@ -4294,3 +4294,26 @@ Widget? buildAvatarWidget({
     ),
   );
 }
+
+// ---- Adoluna b79: merchant-locked settings with a staff unlock (session only) ----
+final RxBool adolunaStaff = false.obs;
+final List<DateTime> _adolunaTaps = [];
+
+/// True when a built-in "hide-*" option hides this section for merchants (staff unlock overrides).
+bool adolunaHide(String key) =>
+    !adolunaStaff.value && bind.mainGetBuildinOption(key: key) == 'Y';
+
+/// Tap the version text 7 times within 5 seconds to reveal advanced settings until restart.
+void adolunaVersionTap() {
+  if (adolunaStaff.value) return;
+  final now = DateTime.now();
+  _adolunaTaps.add(now);
+  _adolunaTaps.removeWhere((t) => now.difference(t).inMilliseconds > 5000);
+  if (_adolunaTaps.length >= 7) {
+    _adolunaTaps.clear();
+    adolunaStaff.value = true;
+    showToast(translate('Advanced settings unlocked'));
+  } else if (_adolunaTaps.length >= 4) {
+    showToast('${7 - _adolunaTaps.length}');
+  }
+}
