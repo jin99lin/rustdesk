@@ -45,11 +45,11 @@ struct Cfg {
     sig: String,
 }
 
-fn pk() -> ResultType<sign::PublicKey> {
+pub(crate) fn pk() -> ResultType<sign::PublicKey> {
     sign::PublicKey::from_slice(&STANDARD.decode(TICKET_PUBKEY)?).ok_or(anyhow!("bad built-in key"))
 }
 
-fn verify_sig(pk: &sign::PublicKey, msg: &str, sig_b64: &str) -> ResultType<()> {
+pub(crate) fn verify_sig(pk: &sign::PublicKey, msg: &str, sig_b64: &str) -> ResultType<()> {
     let sig = STANDARD.decode(sig_b64.as_bytes())?;
     let sig = sign::Signature::from_bytes(&sig).map_err(|_| anyhow!("bad signature format"))?;
     if !sign::verify_detached(&sig, msg.as_bytes(), pk) {

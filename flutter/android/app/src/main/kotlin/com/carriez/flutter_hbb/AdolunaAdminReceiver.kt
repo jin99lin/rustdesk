@@ -1,6 +1,7 @@
 package com.carriez.flutter_hbb
 
-// Adoluna DO TEST build (b78-do3): Device Owner helpers. NOT for merchant release.
+// Adoluna b79: Device Owner core helpers (setup, kiosk, install). Backend commands live in AdolunaDevice.kt.
+// The TEST_* broadcasts stay for staff via adb (protected by android.permission.DUMP).
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.ActivityOptions
@@ -51,7 +52,7 @@ object AdolunaDO {
     fun setup(c: Context) {
         if (!isOwner(c)) { Log.w(TAG, "setup: not device owner"); return }
         val d = dpm(c); val a = admin(c)
-        val perms = mutableListOf(android.Manifest.permission.RECORD_AUDIO)
+        val perms = mutableListOf(android.Manifest.permission.RECORD_AUDIO, android.Manifest.permission.READ_PHONE_STATE)
         if (Build.VERSION.SDK_INT >= 33) perms += "android.permission.POST_NOTIFICATIONS"
         for (p in perms) try {
             val ok = d.setPermissionGrantState(a, c.packageName, p, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED)
@@ -113,10 +114,21 @@ object AdolunaDO {
                 c.startActivity(i, ActivityOptions.makeBasic().setLockTaskEnabled(true).toBundle())
             else c.startActivity(i)
             Log.i(TAG, "kiosk: started AdolunaKioskActivity for $pkg")
+            AdolunaDevice.showHotspot(c)
         } catch (e: Exception) { Log.e(TAG, "kiosk: start kiosk activity failed: $e") }
     }
 
+    /** Fallback/timed unlock: leave lock task but keep the kiosk app remembered for relock. */
+    fun stopLockKeepPkg(c: Context) {
+        AdolunaDevice.hideHotspot(c)
+        if (lockState(c) != 0) try {
+            c.startActivity(Intent(c, AdolunaKioskActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("stop", true))
+        } catch (e: Exception) { Log.w(TAG, "kiosk pause: $e") }
+        ensureService(c, "kiosk-pause")
+    }
+
     fun clearKiosk(c: Context) {
+        AdolunaDevice.hideHotspot(c)
         c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_KIOSK).apply()
         if (lockState(c) != 0) try {
             c.startActivity(Intent(c, AdolunaKioskActivity::class.java)
@@ -178,6 +190,10 @@ class AdolunaInstallResult : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
                 val st = i.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)
                 Log.i(TAG, "install result status=$st msg=${i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
+                val n = i.getLongExtra("n", 0)
+                if (n > 0 && st != PackageInstaller.STATUS_PENDING_USER_ACTION)
+                    AdolunaDevice.ack(n, st == PackageInstaller.STATUS_SUCCESS, "install result $st ${i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""}")
+                if (st != PackageInstaller.STATUS_PENDING_USER_ACTION) AdolunaDevice.onInstallDone(c)
                 if (st == PackageInstaller.STATUS_PENDING_USER_ACTION) {
                     @Suppress("DEPRECATION") val confirm = i.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
                     confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let { c.startActivity(it) }

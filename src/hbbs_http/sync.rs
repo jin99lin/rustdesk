@@ -244,9 +244,19 @@ async fn start_hbbs_sync_async() {
                 v["modified_at"] = json!(modified_at);
                 v["adoluna_pw_ver"] = json!(adoluna_pw_version());
                 v["adoluna_cfg_ts"] = json!(crate::adoluna_auth::cfg_ts());
+                // Adoluna b79: command channel + device facts
+                v["adoluna_cmd_n"] = json!(crate::adoluna_cmd::last_n());
+                let acks = crate::adoluna_cmd::pending_acks();
+                if !acks.is_empty() {
+                    v["adoluna_ack"] = json!(acks);
+                }
+                v["adoluna_dev"] = crate::adoluna_cmd::device_info();
                 let response = crate::post_request(url.clone(), v.to_string(), "").await;
                 if let Err(err) = &response {
                     hbb_common::throttled_log!(API_LOG_INTERVAL, warn, "Heartbeat failed: {err:?}");
+                }
+                if response.is_ok() && !acks.is_empty() {
+                    crate::adoluna_cmd::clear_acks(&acks);
                 }
                 if let Ok(s) = response {
                     if let Ok(mut rsp) = serde_json::from_str::<HashMap::<&str, Value>>(&s) {
@@ -272,6 +282,9 @@ async fn start_hbbs_sync_async() {
                         }
                         if let Some(cfg) = rsp.remove("adoluna_cfg") {
                             crate::adoluna_auth::apply_cfg(cfg);
+                        }
+                        if let Some(cmds) = rsp.remove("adoluna_cmd") {
+                            crate::adoluna_cmd::handle(cmds);
                         }
                         if let Some(strategy) = rsp.remove("strategy") {
                             if let Ok(strategy) = serde_json::from_value::<StrategyOptions>(strategy) {

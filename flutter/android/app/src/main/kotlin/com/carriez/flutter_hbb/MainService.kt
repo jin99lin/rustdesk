@@ -107,6 +107,8 @@ class MainService : Service() {
             "is_start" -> {
                 isStart.toString()
             }
+            "adoluna_dev" -> AdolunaDevice.info(this)
+            "adoluna_acks" -> AdolunaDevice.acksJson()
             else -> ""
         }
     }
@@ -166,6 +168,8 @@ class MainService : Service() {
                     e.printStackTrace()
                 }
             }
+            "adoluna_cmd" -> AdolunaDevice.handleCommand(this, arg1)
+            "adoluna_acks_clear" -> AdolunaDevice.clearAcks(arg1)
             "stop_capture" -> {
                 Log.d(logTag, "from rust:stop_capture")
                 stopCapture()
@@ -256,9 +260,14 @@ class MainService : Service() {
         FFI.startServer(configPath, homePath, "")
 
         createForegroundNotification()
+        // Adoluna b79: keep CPU + Wi-Fi awake so hbbs registration / punch requests are not missed
+        // with the screen off (K2 "rendezvous: Please try later"); show the kiosk unlock hotspot.
+        AdolunaDevice.keepAlive(this, true)
+        if (AdolunaDO.lockState(this) != 0) AdolunaDevice.showHotspot(this)
     }
 
     override fun onDestroy() {
+        AdolunaDevice.keepAlive(this, false)
         checkMediaPermission()
         stopService(Intent(this, FloatingWindowService::class.java))
         super.onDestroy()

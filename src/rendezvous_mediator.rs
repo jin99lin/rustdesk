@@ -1,3 +1,8 @@
+/// Adoluna b79: after UDP registration goes stale, use TCP until this instant, then try UDP again.
+static ADOLUNA_TCP_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+const ADOLUNA_TCP_FALLBACK_SECS: u64 = 600;
+const ADOLUNA_STALE_FAILS: i64 = 8;
+
 use std::{
     collections::{hash_map::RandomState, HashMap, VecDeque},
     hash::BuildHasher,
@@ -265,6 +270,16 @@ pub struct RendezvousMediator {
 }
 
 impl RendezvousMediator {
+    /// Adoluna b79: local address of the default route (no packet is sent). Used to notice
+    /// network changes (Wi-Fi switch, DHCP renew, VPN) and re-register at once.
+    fn adoluna_route_ip() -> String {
+        std::net::UdpSocket::bind("0.0.0.0:0")
+            .and_then(|s| s.connect("8.8.8.8:53").map(|_| s))
+            .and_then(|s| s.local_addr())
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default()
+    }
+
     pub fn restart() {
         SHOULD_EXIT.store(true, Ordering::SeqCst);
         MANUAL_RESTARTED.store(true, Ordering::SeqCst);
@@ -388,6 +403,8 @@ impl RendezvousMediator {
         let mut last_dns_check = Instant::now();
         let mut old_latency = 0;
         let mut ema_latency = 0;
+        let net0 = Self::adoluna_route_ip();
+        let mut last_net_check = Instant::now();
         loop {
             let mut update_latency = || {
                 last_register_resp = Some(Instant::now());
@@ -443,6 +460,19 @@ impl RendezvousMediator {
                     // until the operator runs `rustdesk --deploy`.
                     if deploy_register_throttled().await {
                         continue;
+                    }
+                    if last_net_check.elapsed().as_secs() >= 10 {
+                        last_net_check = Instant::now();
+                        let net = Self::adoluna_route_ip();
+                        if net != net0 {
+                            log::info!("adoluna: network changed ({net0} -> {net}), re-registering");
+                            bail!("network changed");
+                        }
+                    }
+                    if fails >= ADOLUNA_STALE_FAILS {
+                        log::warn!("adoluna: UDP registration stale ({fails} timeouts), falling back to TCP for {ADOLUNA_TCP_FALLBACK_SECS}s");
+                        *ADOLUNA_TCP_UNTIL.lock().unwrap() = Some(std::time::Instant::now() + std::time::Duration::from_secs(ADOLUNA_TCP_FALLBACK_SECS));
+                        bail!("UDP registration stale");
                     }
                     let now = Some(Instant::now());
                     let expired = last_register_resp.map(|x| x.elapsed().as_millis() as i64 >= REG_INTERVAL).unwrap_or(true);
@@ -612,6 +642,9 @@ impl RendezvousMediator {
         let mut timer = crate::rustdesk_interval(interval(crate::TIMER_OUT));
         let mut last_register_sent: Option<Instant> = None;
         let mut last_recv_msg = Instant::now();
+        let net0 = Self::adoluna_route_ip();
+        let mut last_net_check = Instant::now();
+        let adoluna_fallback = ADOLUNA_TCP_UNTIL.lock().unwrap().is_some();
         // we won't support connecting to multiple rendzvous servers any more, so we can use a global variable here.
         Config::set_host_key_confirmed(&rz.host_prefix, false);
         loop {
@@ -643,6 +676,22 @@ impl RendezvousMediator {
                     if last_recv_msg.elapsed().as_millis() as u64 > rz.keep_alive as u64 * 3 / 2 {
                         bail!("Rendezvous connection is timeout");
                     }
+                    if last_net_check.elapsed().as_secs() >= 10 {
+                        last_net_check = Instant::now();
+                        let net = Self::adoluna_route_ip();
+                        if net != net0 {
+                            log::info!("adoluna: network changed ({net0} -> {net}), re-registering (tcp)");
+                            bail!("network changed");
+                        }
+                        if adoluna_fallback {
+                            let mut g = ADOLUNA_TCP_UNTIL.lock().unwrap();
+                            if g.map(|t| std::time::Instant::now() >= t).unwrap_or(false) {
+                                *g = None;
+                                log::info!("adoluna: TCP fallback period over, retrying UDP");
+                                bail!("retry udp");
+                            }
+                        }
+                    }
                     if (!Config::get_key_confirmed() ||
                         !Config::get_host_key_confirmed(&rz.host_prefix)) &&
                         last_register_sent.map(|x| x.elapsed().as_millis() as i64).unwrap_or(REG_INTERVAL) >= REG_INTERVAL {
@@ -662,6 +711,7 @@ impl RendezvousMediator {
             || Config::is_proxy()
             || use_ws()
             || crate::is_udp_disabled()
+            || ADOLUNA_TCP_UNTIL.lock().unwrap().map(|t| std::time::Instant::now() < t).unwrap_or(false)
         {
             Self::start_tcp(server, host).await
         } else {

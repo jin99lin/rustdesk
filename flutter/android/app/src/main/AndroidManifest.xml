@@ -20,6 +20,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!--Adoluna DO test: PackageInstaller session install-->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!--Adoluna b79: Device Owner reads the serial number (granted by DO, never prompted)-->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <queries>
         <intent>
@@ -56,6 +58,12 @@
             android:taskAffinity="com.adoluna.support.kiosk"
             android:noHistory="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity
+            android:name=".AdolunaUnlockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:lockTaskMode="if_whitelisted"
+            android:theme="@android:style/Theme.DeviceDefault.Light.Dialog" />
         <receiver
             android:name=".AdolunaDOReceiver"
             android:exported="true"

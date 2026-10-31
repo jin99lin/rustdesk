@@ -795,6 +795,7 @@ pub fn start_os_service() {
     log::info!("Username: {}", crate::username());
     // Silent auto-update — runs as root via LaunchDaemon, no osascript dialog needed
     crate::updater::start_auto_update_macos();
+    crate::adoluna_cmd::mac_root_poll();
     if let Err(err) = crate::ipc::start("_service") {
         log::error!("Failed to start ipc_service: {}", err);
     }
