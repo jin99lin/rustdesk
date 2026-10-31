@@ -15,6 +15,8 @@ class PermissionRequestTransparentActivity: Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.d(logTag, "onCreate PermissionRequestTransparentActivity: intent.action: ${intent.action}")
+        AdolunaKioskActivity.permissionInFlight = true
+        Log.i("AdolunaDO", "permission activity onCreate task=$taskId")
 
         when (intent.action) {
             ACT_REQUEST_MEDIA_PROJECTION -> {
@@ -36,6 +38,7 @@ class PermissionRequestTransparentActivity: Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_REQUEST_MEDIA_PROJECTION) {
+            Log.i("AdolunaDO", "media projection consent result=$resultCode data=${data != null}")
             if (resultCode == RESULT_OK && data != null) {
                 launchService(data)
             } else {
@@ -50,6 +53,12 @@ class PermissionRequestTransparentActivity: Activity() {
         }
 
         finish()
+    }
+
+    override fun onDestroy() {
+        AdolunaKioskActivity.permissionInFlight = false
+        Log.i("AdolunaDO", "permission activity onDestroy")
+        super.onDestroy()
     }
 
     private fun launchService(mediaProjectionResultIntent: Intent) {

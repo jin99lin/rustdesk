@@ -377,6 +377,18 @@ class MainService : Service() {
                 putExtra(EXT_MEDIA_PROJECTION_RESULT_RECEIVER, mediaProjectionResultReceiver)
             }
         }
+        // Adoluna DO test: while kiosk-locked, start the consent activity inside the locked kiosk task.
+        val kiosk = AdolunaKioskActivity.instance
+        val lock = AdolunaDO.lockState(this)
+        Log.i("AdolunaDO", "requestMediaProjection recovery=$recovery lockState=$lock kioskActivity=${kiosk != null}")
+        if (lock != 0 && kiosk != null) {
+            intent.flags = 0
+            kiosk.runOnUiThread {
+                try { kiosk.startActivity(intent); Log.i("AdolunaDO", "permission activity started in kiosk task") }
+                catch (e: Exception) { Log.e("AdolunaDO", "permission in kiosk task failed: $e"); startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }
+            return
+        }
         startActivity(intent)
     }
 
@@ -432,6 +444,7 @@ class MainService : Service() {
 
     @Synchronized
     private fun handleMediaProjectionStopped(stoppedProjection: MediaProjection) {
+        Log.w("AdolunaDO", "MediaProjection onStop (lockState=${AdolunaDO.lockState(this)})")
         if (mediaProjection !== stoppedProjection) {
             return
         }
@@ -759,6 +772,7 @@ class MainService : Service() {
     }
 
     private fun handleVirtualDisplayFailure(): Boolean {
+        Log.w("AdolunaDO", "virtual display failure -> re-request projection (lockState=${AdolunaDO.lockState(this)})")
         captureRestartPending = true
         virtualDisplay?.release()
         virtualDisplay = null

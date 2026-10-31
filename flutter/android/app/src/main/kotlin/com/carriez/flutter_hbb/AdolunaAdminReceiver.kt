@@ -1,6 +1,6 @@
 package com.carriez.flutter_hbb
 
-// Adoluna DO TEST build (b78-do2): Device Owner helpers. NOT for merchant release.
+// Adoluna DO TEST build (b78-do3): Device Owner helpers. NOT for merchant release.
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.ActivityOptions
@@ -72,13 +72,27 @@ object AdolunaDO {
     /** Allowlist own pkg + target, disable lock-task features, verify, then hand off to AdolunaKioskActivity. */
     fun allowKiosk(c: Context, pkg: String): Boolean {
         val d = dpm(c); val a = admin(c)
-        try { d.setLockTaskPackages(a, arrayOf(c.packageName, pkg)) } catch (e: Exception) { Log.e(TAG, "kiosk: setLockTaskPackages failed: $e"); return false }
+        try { d.setLockTaskPackages(a, arrayOf(c.packageName, pkg, "com.android.systemui")) } catch (e: Exception) { Log.e(TAG, "kiosk: setLockTaskPackages failed: $e"); return false }
         if (Build.VERSION.SDK_INT >= 28) try {
             d.setLockTaskFeatures(a, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
         } catch (e: Exception) { Log.w(TAG, "kiosk: setLockTaskFeatures: $e") }
         val pkgs = try { d.getLockTaskPackages(a).joinToString(",") } catch (e: Exception) { "err $e" }
         Log.i(TAG, "kiosk: lockTaskPackages=[$pkgs] permitted(self)=${d.isLockTaskPermitted(c.packageName)} permitted($pkg)=${d.isLockTaskPermitted(pkg)}")
         return d.isLockTaskPermitted(pkg)
+    }
+
+    /** Re-init MainService media projection (+ server/hbbs) if capture permission was lost. */
+    fun ensureService(c: Context, why: String, delayMs: Long = 3000) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            Log.i(TAG, "svc check ($why): isReady=${MainService.isReady} isStart=${MainService.isStart} lockState=${lockState(c)}")
+            if (MainService.isReady) return@postDelayed
+            try {
+                val i = Intent(c, MainService::class.java).setAction(ACT_INIT_MEDIA_PROJECTION_AND_SERVICE)
+                    .putExtra(EXT_INIT_FROM_BOOT, true)
+                if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i) else c.startService(i)
+                Log.i(TAG, "svc ($why): re-init MainService requested")
+            } catch (e: Exception) { Log.e(TAG, "svc ($why): re-init failed: $e") }
+        }, delayMs)
     }
 
     fun startKiosk(c: Context, pkg: String) {
@@ -110,6 +124,7 @@ object AdolunaDO {
         } catch (e: Exception) { Log.w(TAG, "kiosk clear: stop activity: $e") }
         if (isOwner(c)) try { dpm(c).setLockTaskPackages(admin(c), arrayOf()) } catch (e: Exception) { Log.w(TAG, "kiosk clear: $e") }
         Handler(Looper.getMainLooper()).postDelayed({ Log.i(TAG, "kiosk cleared, lockTaskModeState=${lockState(c)}") }, 1500)
+        ensureService(c, "kiosk-clear")
     }
 
     fun clearOwner(c: Context) {
@@ -174,8 +189,13 @@ class AdolunaInstallResult : BroadcastReceiver() {
 /** Test-only, invisible. Enters lock task itself, then launches the allowlisted target which joins lock task mode.
  *  Stays alive (behind target) so the lock task keeps a root; "stop" extra calls stopLockTask(). */
 class AdolunaKioskActivity : Activity() {
+    companion object {
+        @Volatile var instance: AdolunaKioskActivity? = null
+        @Volatile var permissionInFlight = false
+    }
     private var launched = false
-    override fun onCreate(b: Bundle?) { super.onCreate(b); handle(intent) }
+    override fun onCreate(b: Bundle?) { super.onCreate(b); instance = this; handle(intent) }
+    override fun onDestroy() { if (instance === this) instance = null; Log.i(TAG, "kiosk activity destroyed"); super.onDestroy() }
     override fun onNewIntent(i: Intent) { super.onNewIntent(i); setIntent(i); launched = false; handle(i) }
 
     private fun handle(i: Intent) {
@@ -185,9 +205,18 @@ class AdolunaKioskActivity : Activity() {
         }
         val pkg = i.getStringExtra("pkg") ?: AdolunaDO.kioskPkg(this)
         if (pkg == null) { finish(); return }
+        // Make sure screen capture is granted BEFORE locking, so no consent activity is needed at connect.
+        if (!MainService.isReady) { Log.i(TAG, "kiosk: capture not ready, requesting before lock"); AdolunaDO.ensureService(this, "kiosk-prelock", 0) }
+        waitReadyThenLock(pkg, 0)
+    }
+
+    private fun waitReadyThenLock(pkg: String, n: Int) {
+        if (!MainService.isReady && n < 16) { Handler(Looper.getMainLooper()).postDelayed({ waitReadyThenLock(pkg, n + 1) }, 500); return }
+        Log.i(TAG, "kiosk: capture isReady=${MainService.isReady} after ${n * 500}ms, locking")
         try { startLockTask(); Log.i(TAG, "kiosk: startLockTask ok, state=${AdolunaDO.lockState(this)}") }
         catch (e: Exception) { Log.e(TAG, "kiosk: startLockTask failed: $e") }
         Handler(Looper.getMainLooper()).postDelayed({ launchTarget(pkg) }, 400)
+        AdolunaDO.ensureService(this, "kiosk-start", 4000)
     }
 
     private fun launchTarget(pkg: String) {
@@ -211,7 +240,11 @@ class AdolunaKioskActivity : Activity() {
         super.onResume()
         if (launched && AdolunaDO.lockState(this) != 0) {
             val pkg = AdolunaDO.kioskPkg(this) ?: return
-            Handler(Looper.getMainLooper()).postDelayed({ launched = false; launchTarget(pkg) }, 800)
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (permissionInFlight) { Log.i(TAG, "kiosk: permission activity in flight, not reopening target"); return@postDelayed }
+                if (!hasWindowFocus() && instance !== this) return@postDelayed
+                launched = false; launchTarget(pkg)
+            }, 1500)
         }
     }
 }

@@ -35,6 +35,7 @@ class BootReceiver : BroadcastReceiver() {
             if (isOwner && intent.action != Intent.ACTION_USER_PRESENT) {
                 AdolunaDO.setup(context)
                 AdolunaDO.launchKiosk(context)
+                if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) AdolunaDO.ensureService(context, "self-update", 5000)
             }
             // Adoluna: fallback actions may fire repeatedly; only start once per process.
             if (started || MainService.isStart) {
