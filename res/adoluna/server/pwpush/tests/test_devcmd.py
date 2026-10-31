@@ -13,6 +13,7 @@ def raw(k):
 
 class Unit(unittest.TestCase):
     def setUp(self):
+        import tempfile; D.set_key_dir(tempfile.mkdtemp())
         self.c = sqlite3.connect(":memory:"); D.init(self.c); self.k = Ed25519PrivateKey.generate()
 
     def test_queue_sign_ack(self):
@@ -51,7 +52,7 @@ class Unit(unittest.TestCase):
         self.assertEqual(o["valid_until"], 7200)
         code, n = D.new_unlock_code(self.c, "123", "t")
         self.assertEqual(len(code), 6)
-        p = json.loads(self.c.execute("select p from dev_cmds where id=?", (n,)).fetchone()[0])
+        p = json.loads(D.unseal(self.c.execute("select p from dev_cmds where id=?", (n,)).fetchone()[0]))
         import hashlib
         self.assertEqual(hashlib.sha256((p["s"] + code).encode()).hexdigest(), p["h"])
         self.assertNotIn(code, json.dumps(D.detail(self.c, "123")))  # secrets never echoed
@@ -77,6 +78,18 @@ class Unit(unittest.TestCase):
         self.assertTrue(D.capability_error(self.c, "8", "kiosk_lock"))
         self.assertIsNone(D.capability_error(self.c, "9", "kiosk_lock"))  # unknown device: allowed (device decides)
         self.assertEqual(D.summary(self.c)["8"]["os_label"], "Windows 11 Home 23H2 (22631.4317)")
+
+    def test_secrets_sealed_at_rest(self):
+        D.new_otp_secret(self.c, "5", "t")
+        D.new_unlock_code(self.c, "5", "t")
+        raw = [r[0] for r in self.c.execute("select otp_k from dev_secrets")] + \
+              [r[0] for r in self.c.execute("select p from dev_cmds where k in ('otp_secret','unlock_code')")]
+        self.assertTrue(all(x.startswith("enc1:") for x in raw))
+        self.assertTrue(D.current_otp(self.c, "5"))
+        out = D.on_heartbeat(self.c, self.k, {"id": "5", "adoluna_cmd_n": 0})
+        self.assertTrue(all(not o["p"].startswith("enc1:") for o in out))
+        D.on_heartbeat(self.c, self.k, {"id": "5", "adoluna_cmd_n": 9, "adoluna_ack": [{"n": o["n"], "ok": True} for o in out]})
+        self.assertEqual({r[0] for r in self.c.execute("select p from dev_cmds where k in ('otp_secret','unlock_code')")}, {"{}"})
 
     def test_summary_badge(self):
         D.on_heartbeat(self.c, self.k, {"id": "7", "adoluna_cmd_n": 0, "adoluna_dev": {"is_owner": True, "sdk": 30, "kiosk": False}})

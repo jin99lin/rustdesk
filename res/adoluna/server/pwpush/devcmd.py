@@ -25,6 +25,49 @@ SCHEMA = """
   create table if not exists dev_rel(peer_id text, platform text, rel_ts integer, primary key(peer_id, platform));
 """
 
+# --- at-rest encryption for secret material (OTP seeds, unlock-code hashes) ---
+# stdlib-only: HMAC-SHA256 keystream (encrypt) + HMAC-SHA256 tag (authenticate). Key file lives next to the
+# signing keys in PW_DIR (0600), never in the DB.
+SECRET_KINDS = {"otp_secret", "unlock_code"}
+_KEY = None
+
+def set_key_dir(d):
+    global _KEY
+    import os
+    path = os.path.join(d, "devsecret.key")
+    if not os.path.exists(path):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(secrets.token_bytes(32))
+    with open(path, "rb") as f:
+        _KEY = f.read()
+
+def _ks(nonce, n):
+    out = b""
+    i = 0
+    while len(out) < n:
+        out += hmac.new(_KEY, b"ks" + nonce + i.to_bytes(4, "big"), hashlib.sha256).digest()
+        i += 1
+    return out[:n]
+
+def seal(s):
+    if _KEY is None:
+        raise RuntimeError("devcmd key not loaded")
+    b = s.encode()
+    nonce = secrets.token_bytes(16)
+    ct = bytes(x ^ y for x, y in zip(b, _ks(nonce, len(b))))
+    tag = hmac.new(_KEY, b"tag" + nonce + ct, hashlib.sha256).digest()[:16]
+    return "enc1:" + base64.b64encode(nonce + ct + tag).decode()
+
+def unseal(s):
+    if not isinstance(s, str) or not s.startswith("enc1:"):
+        return s  # legacy plaintext row
+    raw = base64.b64decode(s[5:])
+    nonce, ct, tag = raw[:16], raw[16:-16], raw[-16:]
+    if not hmac.compare_digest(tag, hmac.new(_KEY, b"tag" + nonce + ct, hashlib.sha256).digest()[:16]):
+        raise ValueError("secret tag mismatch")
+    return bytes(x ^ y for x, y in zip(ct, _ks(nonce, len(ct)))).decode()
+
 def init(c):
     c.executescript(SCHEMA)
 
@@ -83,6 +126,8 @@ def capability_error(c, dev, k):
 def queue(c, dev, k, p, by, now=None):
     now = int(now or time.time())
     ps = json.dumps(p, separators=(",", ":"), sort_keys=True)
+    if k in SECRET_KINDS:
+        ps = seal(ps)
     cur = c.execute("insert into dev_cmds(peer_id,k,p,e,created_at,created_by) values(?,?,?,?,?,?)",
                     (dev, k, ps, now + TTL.get(k, DEFAULT_TTL), now, by))
     return cur.lastrowid
@@ -95,7 +140,7 @@ def new_unlock_code(c, dev, by):
 
 def new_otp_secret(c, dev, by):
     k = secrets.token_hex(20)
-    c.execute("insert or replace into dev_secrets(peer_id,otp_k,ts) values(?,?,?)", (dev, k, int(time.time())))
+    c.execute("insert or replace into dev_secrets(peer_id,otp_k,ts) values(?,?,?)", (dev, seal(k), int(time.time())))
     return queue(c, dev, "otp_secret", {"k": k}, by)
 
 def otp(hexkey, dev, step):
@@ -108,7 +153,7 @@ def current_otp(c, dev, now=None):
     if not r or not r[0]:
         return None
     now = int(now or time.time())
-    return {"otp": otp(r[0], dev, now // 600), "valid_until": (now // 600 + 2) * 600}
+    return {"otp": otp(unseal(r[0]), dev, now // 600), "valid_until": (now // 600 + 2) * 600}
 
 def on_heartbeat(c, key, q, now=None):
     """Store facts/acks; return list of signed commands to deliver (may be empty)."""
@@ -125,6 +170,8 @@ def on_heartbeat(c, key, q, now=None):
                       (now, 1 if a.get("ok") else 0, str(a.get("msg", ""))[:500], int(a["n"]), dev))
         except Exception:
             pass
+    # scrub delivered+acked secret payloads entirely
+    c.execute("update dev_cmds set p='{}' where peer_id=? and acked_at is not null and k in ('otp_secret','unlock_code')", (dev,))
     last = int(q.get("adoluna_cmd_n") or 0)
     # auto-update release policy (once per device per release)
     plat = platform_of(info) if isinstance(info, dict) else ""
@@ -139,6 +186,7 @@ def on_heartbeat(c, key, q, now=None):
                      (dev, last, now)).fetchall()
     out = []
     for n, k, p, e in rows:
+        p = unseal(p)
         sig = base64.b64encode(key.sign(msg(dev, n, k, p, e).encode())).decode()
         out.append({"n": n, "k": k, "p": p, "e": e, "sig": sig})
         c.execute("update dev_cmds set delivered_at=coalesce(delivered_at,?) where id=?", (now, n))

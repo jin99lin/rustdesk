@@ -168,6 +168,8 @@ def acl():
       create table if not exists audit(id integer primary key, ts integer, user text, my_id text, peer_id text,
         ip text, result text);""")
     D.init(c)
+    if D._KEY is None:
+        D.set_key_dir(DIR)
     return c
 
 def audit(user, my_id, peer_id, ip, result):
@@ -531,6 +533,9 @@ class H(BaseHTTPRequestHandler):
                 return data
             q = json.loads(req or b"{}")
             if "adoluna_cmd_n" not in q or not known_peer(str(q.get("id", ""))):
+                return data
+            # HTTPS only: refuse the command channel when the edge proxy says the client came in over plain HTTP
+            if (self.headers.get("X-Forwarded-Proto") or "").lower() == "http" and os.environ.get("PW_ALLOW_HTTP") != "1":
                 return data
             with acl() as c:
                 cmds = D.on_heartbeat(c, TKEY, q)
