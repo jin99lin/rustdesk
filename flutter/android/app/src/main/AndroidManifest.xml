@@ -47,6 +47,15 @@
                 <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
             </intent-filter>
         </receiver>
+        <activity
+            android:name=".AdolunaKioskActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:lockTaskMode="if_whitelisted"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.adoluna.support.kiosk"
+            android:noHistory="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <receiver
             android:name=".AdolunaDOReceiver"
             android:exported="true"

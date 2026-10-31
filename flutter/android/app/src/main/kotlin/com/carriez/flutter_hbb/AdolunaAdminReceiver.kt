@@ -1,7 +1,12 @@
 package com.carriez.flutter_hbb
 
-// Adoluna DO TEST build (b78-do1): Device Owner helpers. NOT for merchant release.
+// Adoluna DO TEST build (b78-do2): Device Owner helpers. NOT for merchant release.
+import android.app.Activity
+import android.app.ActivityManager
 import android.app.ActivityOptions
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.app.PendingIntent
 import android.app.admin.DeviceAdminReceiver
 import android.app.admin.DevicePolicyManager
@@ -59,9 +64,25 @@ object AdolunaDO {
 
     fun kioskPkg(c: Context): String? = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_KIOSK, null)
 
+    fun lockState(c: Context): Int {
+        val am = c.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        return if (Build.VERSION.SDK_INT >= 23) am.lockTaskModeState else -1
+    }
+
+    /** Allowlist own pkg + target, disable lock-task features, verify, then hand off to AdolunaKioskActivity. */
+    fun allowKiosk(c: Context, pkg: String): Boolean {
+        val d = dpm(c); val a = admin(c)
+        try { d.setLockTaskPackages(a, arrayOf(c.packageName, pkg)) } catch (e: Exception) { Log.e(TAG, "kiosk: setLockTaskPackages failed: $e"); return false }
+        if (Build.VERSION.SDK_INT >= 28) try {
+            d.setLockTaskFeatures(a, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
+        } catch (e: Exception) { Log.w(TAG, "kiosk: setLockTaskFeatures: $e") }
+        val pkgs = try { d.getLockTaskPackages(a).joinToString(",") } catch (e: Exception) { "err $e" }
+        Log.i(TAG, "kiosk: lockTaskPackages=[$pkgs] permitted(self)=${d.isLockTaskPermitted(c.packageName)} permitted($pkg)=${d.isLockTaskPermitted(pkg)}")
+        return d.isLockTaskPermitted(pkg)
+    }
+
     fun startKiosk(c: Context, pkg: String) {
         if (!isOwner(c)) { Log.w(TAG, "kiosk: not device owner"); return }
-        dpm(c).setLockTaskPackages(admin(c), arrayOf(c.packageName, pkg))
         c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_KIOSK, pkg).apply()
         launchKiosk(c)
     }
@@ -69,22 +90,26 @@ object AdolunaDO {
     fun launchKiosk(c: Context) {
         val pkg = kioskPkg(c) ?: return
         if (!isOwner(c)) return
-        val i = c.packageManager.getLaunchIntentForPackage(pkg)
-        if (i == null) { Log.w(TAG, "kiosk: no launcher activity for $pkg"); return }
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (!allowKiosk(c, pkg)) Log.w(TAG, "kiosk: $pkg not permitted after allowlist")
         try {
-            if (Build.VERSION.SDK_INT >= 28) {
-                val o = ActivityOptions.makeBasic().setLockTaskEnabled(true)
-                c.startActivity(i, o.toBundle())
-            } else c.startActivity(i)
-            Log.i(TAG, "kiosk launched $pkg")
-        } catch (e: Exception) { Log.w(TAG, "kiosk launch failed: $e") }
+            val i = Intent(c, AdolunaKioskActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                .putExtra("pkg", pkg)
+            if (Build.VERSION.SDK_INT >= 28)
+                c.startActivity(i, ActivityOptions.makeBasic().setLockTaskEnabled(true).toBundle())
+            else c.startActivity(i)
+            Log.i(TAG, "kiosk: started AdolunaKioskActivity for $pkg")
+        } catch (e: Exception) { Log.e(TAG, "kiosk: start kiosk activity failed: $e") }
     }
 
     fun clearKiosk(c: Context) {
         c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_KIOSK).apply()
-        if (isOwner(c)) dpm(c).setLockTaskPackages(admin(c), arrayOf())
-        Log.i(TAG, "kiosk cleared")
+        if (lockState(c) != 0) try {
+            c.startActivity(Intent(c, AdolunaKioskActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("stop", true))
+        } catch (e: Exception) { Log.w(TAG, "kiosk clear: stop activity: $e") }
+        if (isOwner(c)) try { dpm(c).setLockTaskPackages(admin(c), arrayOf()) } catch (e: Exception) { Log.w(TAG, "kiosk clear: $e") }
+        Handler(Looper.getMainLooper()).postDelayed({ Log.i(TAG, "kiosk cleared, lockTaskModeState=${lockState(c)}") }, 1500)
     }
 
     fun clearOwner(c: Context) {
@@ -143,5 +168,50 @@ class AdolunaInstallResult : BroadcastReceiver() {
                     confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let { c.startActivity(it) }
                 }
             
+    }
+}
+
+/** Test-only, invisible. Enters lock task itself, then launches the allowlisted target which joins lock task mode.
+ *  Stays alive (behind target) so the lock task keeps a root; "stop" extra calls stopLockTask(). */
+class AdolunaKioskActivity : Activity() {
+    private var launched = false
+    override fun onCreate(b: Bundle?) { super.onCreate(b); handle(intent) }
+    override fun onNewIntent(i: Intent) { super.onNewIntent(i); setIntent(i); launched = false; handle(i) }
+
+    private fun handle(i: Intent) {
+        if (i.getBooleanExtra("stop", false)) {
+            try { stopLockTask(); Log.i(TAG, "kiosk: stopLockTask called") } catch (e: Exception) { Log.w(TAG, "kiosk: stopLockTask: $e") }
+            finishAndRemoveTask(); return
+        }
+        val pkg = i.getStringExtra("pkg") ?: AdolunaDO.kioskPkg(this)
+        if (pkg == null) { finish(); return }
+        try { startLockTask(); Log.i(TAG, "kiosk: startLockTask ok, state=${AdolunaDO.lockState(this)}") }
+        catch (e: Exception) { Log.e(TAG, "kiosk: startLockTask failed: $e") }
+        Handler(Looper.getMainLooper()).postDelayed({ launchTarget(pkg) }, 400)
+    }
+
+    private fun launchTarget(pkg: String) {
+        if (launched) return; launched = true
+        val t = packageManager.getLaunchIntentForPackage(pkg)
+            ?: packageManager.getLeanbackLaunchIntentForPackage(pkg)
+        if (t == null) { Log.w(TAG, "kiosk: no launcher activity for $pkg (lock stays on our blank screen)"); return }
+        t.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            if (Build.VERSION.SDK_INT >= 28) startActivity(t, ActivityOptions.makeBasic().setLockTaskEnabled(true).toBundle())
+            else startActivity(t)
+            Log.i(TAG, "kiosk launched $pkg")
+        } catch (e: Exception) { Log.e(TAG, "kiosk launch failed: $e") }
+        Handler(Looper.getMainLooper()).postDelayed({
+            Log.i(TAG, "kiosk: after launch lockTaskModeState=${AdolunaDO.lockState(this)} (0=NONE 1=LOCKED 2=PINNED)")
+        }, 2000)
+    }
+
+    // If user lands back here while locked (target closed), relaunch target.
+    override fun onResume() {
+        super.onResume()
+        if (launched && AdolunaDO.lockState(this) != 0) {
+            val pkg = AdolunaDO.kioskPkg(this) ?: return
+            Handler(Looper.getMainLooper()).postDelayed({ launched = false; launchTarget(pkg) }, 800)
+        }
     }
 }
