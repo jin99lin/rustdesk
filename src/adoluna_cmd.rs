@@ -208,13 +208,23 @@ mod desktop {
         });
         #[cfg(windows)]
         {
+            // Get-WmiObject + registry: works on PowerShell 2 (Win7) through Win11.
             let ps = |s: &str| run_ps(s).map(|x| x.trim().to_owned()).unwrap_or_default();
-            v["serial"] = json!(ps("(Get-CimInstance Win32_BIOS).SerialNumber"));
-            v["model"] = json!(ps("$c=Get-CimInstance Win32_ComputerSystem; \"$($c.Manufacturer) $($c.Model)\""));
-            v["edition"] = json!(ps("(Get-CimInstance Win32_OperatingSystem).Caption"));
-            v["disk_free_gb"] = json!(ps("[math]::Round((Get-PSDrive C).Free/1GB,1)"));
-            v["kiosk"] = json!(ps(&format!("{}; if($o -and $o.Configuration){{'locked'}}else{{''}}", AA_GET)));
-            v["kiosk_capable"] = json!(!v["edition"].as_str().unwrap_or("").contains("Home"));
+            v["serial"] = json!(ps("(Get-WmiObject Win32_BIOS).SerialNumber"));
+            v["model"] = json!(ps("$c=Get-WmiObject Win32_ComputerSystem; \"$($c.Manufacturer) $($c.Model)\""));
+            v["disk_free_gb"] = json!(ps("[math]::Round((Get-WmiObject Win32_LogicalDisk -Filter \"DeviceID='C:'\").FreeSpace/1GB,1)"));
+            let r = ps("$k=Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'; \"$($k.EditionID)|$($k.CurrentBuild)|$($k.UBR)|$($k.DisplayVersion)$(if(-not $k.DisplayVersion){$k.ReleaseId})|$($k.ProductName)\"");
+            let f: Vec<&str> = r.split('|').collect();
+            let g = |i: usize| f.get(i).map(|x| x.trim()).unwrap_or("").to_owned();
+            let w = win_caps(&g(0), g(1).parse().unwrap_or(0));
+            v["edition"] = json!(g(4));
+            v["win"] = json!({"major": w.major, "edition_id": g(0), "edition": w.edition, "build": g(1), "ubr": g(2), "display_version": g(3)});
+            v["cap"] = json!({"install": w.install, "kiosk": w.kiosk, "reason": w.reason});
+            let full = w.kiosk == "full" && !ps(&format!("{}; if($o -and $o.Configuration){{'1'}}", AA_GET)).is_empty();
+            let basic = !ps("if(Get-Command schtasks -EA 0){ schtasks /query /tn AdolunaKiosk 2>$null | Out-Null; if($LASTEXITCODE -eq 0){'1'} }").is_empty();
+            v["kiosk"] = json!(full || basic);
+            v["kiosk_mode"] = json!(if full { "full" } else if basic { "basic" } else { "" });
+            v["kiosk_capable"] = json!(w.kiosk != "none");
         }
         #[cfg(target_os = "macos")]
         {
@@ -285,6 +295,13 @@ mod desktop {
     }
 
     pub fn install(p: &Value) -> ResultType<Option<String>> {
+        #[cfg(windows)]
+        {
+            let c = caps_now();
+            if !c.install {
+                hbb_common::bail!("push-install not supported on Windows {} ({})", c.major, c.reason);
+            }
+        }
         #[cfg(windows)]
         {
             let path = download(p)?;
@@ -370,7 +387,8 @@ mod desktop {
     #[cfg(windows)]
     pub fn run_ps(script: &str) -> ResultType<String> {
         use std::os::windows::process::CommandExt;
-        let f = dl_dir().join(format!("adl-{}.ps1", std::process::id()));
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let f = dl_dir().join(format!("adl-{}-{}.ps1", std::process::id(), SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         std::fs::write(&f, format!("$ErrorActionPreference='Stop'\r\n{script}\r\n"))?;
         let o = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
@@ -415,18 +433,119 @@ mod desktop {
 </AssignedAccessConfiguration>"#)
     }
 
+    #[derive(Debug, PartialEq)]
+    pub struct WinCaps {
+        pub major: &'static str,
+        pub edition: &'static str,
+        pub install: bool,
+        /// "full" = Assigned Access (Win11 Pro+), "basic" = our fallback lock (Win10 Pro+), "none"
+        pub kiosk: &'static str,
+        pub reason: &'static str,
+    }
+
+    /// Jay 10/31: Win11 Pro+ full kiosk; Win10 Pro+ basic lock; Home no kiosk (push-install ok);
+    /// Win7/8 unsupported (buttons greyed out in the admin).
+    pub fn win_caps(edition_id: &str, build: u32) -> WinCaps {
+        let major = match build {
+            b if b >= 22000 => "11",
+            b if b >= 10240 => "10",
+            b if b >= 9600 => "8.1",
+            b if b >= 9200 => "8",
+            b if b >= 7600 => "7",
+            _ => "?",
+        };
+        let e = edition_id.to_lowercase();
+        let edition = if e.starts_with("core") || e.contains("home") {
+            "Home"
+        } else if e.starts_with("professional") {
+            "Pro"
+        } else if e.starts_with("enterprise") || e.starts_with("iot") {
+            "Enterprise"
+        } else if e.starts_with("education") {
+            "Education"
+        } else if e.is_empty() {
+            "?"
+        } else {
+            "Other"
+        };
+        let home = edition == "Home";
+        if major != "11" && major != "10" {
+            return WinCaps { major, edition, install: false, kiosk: "none", reason: "os_unsupported" };
+        }
+        let kiosk = if home { "none" } else if major == "11" { "full" } else { "basic" };
+        WinCaps { major, edition, install: true, kiosk, reason: if home { "needs_pro" } else { "" } }
+    }
+
+    #[cfg(windows)]
+    fn caps_now() -> WinCaps {
+        let r = run_ps("$k=Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'; \"$($k.EditionID)|$($k.CurrentBuild)\"").unwrap_or_default();
+        let mut f = r.trim().split('|');
+        let e = f.next().unwrap_or("").to_owned();
+        win_caps(&e, f.next().unwrap_or("0").trim().parse().unwrap_or(0))
+    }
+
+    /// Basic lock for Win10 Pro (no Assigned Access): a logon task in the user's session keeps the
+    /// POS app running (relaunch on exit) and hides the taskbar; machine policies block Task Manager,
+    /// Win-key hotkeys, lock/switch user/sign-out.  Remote support is untouched (it is a service).
+    #[cfg(windows)]
+    const BASIC_POL: &[(&str, &str)] = &[
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableTaskMgr"),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableLockWorkstation"),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableChangePassword"),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "HideFastUserSwitching"),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoWinKeys"),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoLogoff"),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoTrayContextMenu"),
+    ];
+
+    #[cfg(windows)]
+    fn basic_lock(app: &str) -> ResultType<Option<String>> {
+        let dir = dl_dir().parent().map(|d| d.to_path_buf()).unwrap_or(dl_dir());
+        let ps1 = dir.join("kiosk.ps1");
+        let name = std::path::Path::new(app).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+        std::fs::write(&ps1, format!(r#"Add-Type -Name W -Namespace A -MemberDefinition '[DllImport("user32.dll")] public static extern int FindWindow(string c,string t); [DllImport("user32.dll")] public static extern bool ShowWindow(int h,int c);'
+while ($true) {{
+  foreach ($c in 'Shell_TrayWnd','Shell_SecondaryTrayWnd','Button') {{ $h=[A.W]::FindWindow($c,$null); if ($h) {{ [A.W]::ShowWindow($h,0) | Out-Null }} }}
+  if (-not (Get-Process -Name '{n}' -ErrorAction SilentlyContinue)) {{ Start-Process -FilePath '{a}' }}
+  Start-Sleep -Seconds 3
+}}
+"#, n = name.replace('\'', "''"), a = app.replace('\'', "''")))?;
+        let mut sc = String::new();
+        for (k, n) in BASIC_POL {
+            sc += &format!("if(-not (Test-Path '{k}')){{New-Item -Path '{k}' -Force|Out-Null}}; Set-ItemProperty -Path '{k}' -Name {n} -Value 1 -Type DWord\r\n");
+        }
+        sc += &format!("$ErrorActionPreference='Continue'\r\nschtasks /delete /tn AdolunaKiosk /f 2>$null | Out-Null\r\nschtasks /create /tn AdolunaKiosk /sc onlogon /ru BUILTIN\\Users /rl LIMITED /f /tr 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File {}' | Out-Null\r\nif($LASTEXITCODE -ne 0){{throw 'schtasks create failed'}}\r\nschtasks /run /tn AdolunaKiosk 2>$null | Out-Null", ps1.to_string_lossy());
+        run_ps(&sc)?;
+        Ok(Some("basic lock on (relaunch + hidden taskbar + hotkeys blocked); full effect after next sign-in".into()))
+    }
+
+    #[cfg(windows)]
+    fn basic_unlock() -> ResultType<()> {
+        let mut sc = String::from("$ErrorActionPreference='Continue'\r\nschtasks /end /tn AdolunaKiosk 2>$null | Out-Null\r\nschtasks /delete /tn AdolunaKiosk /f 2>$null | Out-Null\r\n");
+        for (k, n) in BASIC_POL {
+            sc += &format!("Remove-ItemProperty -Path '{k}' -Name {n} -ErrorAction SilentlyContinue\r\n");
+        }
+        run_ps(&sc).map(|_| ())
+    }
+
     #[cfg(windows)]
     pub fn win_kiosk_lock(p: &Value) -> ResultType<Option<String>> {
         let app = p["app"].as_str().unwrap_or_default();
         if app.is_empty() || !app.to_lowercase().ends_with(".exe") {
             hbb_common::bail!("app must be the full path of an .exe");
         }
-        let ed = run_ps("(Get-CimInstance Win32_OperatingSystem).Caption").unwrap_or_default();
-        if ed.contains("Home") {
-            hbb_common::bail!("Windows Home does not support Assigned Access (need Pro/Enterprise/Education): {}", ed.trim());
-        }
         if !std::path::Path::new(app).exists() {
             hbb_common::bail!("app not found: {app}");
+        }
+        let c = caps_now();
+        match c.kiosk {
+            "none" => hbb_common::bail!("kiosk not supported on Windows {} {} ({})", c.major, c.edition, c.reason),
+            "basic" => {
+                let r = basic_lock(app)?;
+                INFO.lock().unwrap().0 = None;
+                return Ok(r);
+            }
+            _ => {}
         }
         let own = std::env::current_exe()?.to_string_lossy().to_string();
         let xml = kiosk_xml(app, &own, p["name"].as_str().unwrap_or("Adoluna POS"));
@@ -445,6 +564,15 @@ mod desktop {
 
     #[cfg(windows)]
     pub fn win_kiosk_unlock(p: &Value) -> ResultType<Option<String>> {
+        basic_unlock().ok();
+        INFO.lock().unwrap().0 = None;
+        if caps_now().kiosk != "full" {
+            if p["reboot"].as_bool().unwrap_or(true) {
+                reboot()?;
+                return Ok(Some("basic lock removed, rebooting".into()));
+            }
+            return Ok(Some("basic lock removed (taskbar returns at next sign-in)".into()));
+        }
         run_ps(&format!("{AA_GET}\r\n$o.Configuration=$null\r\nSet-CimInstance -CimInstance $o"))?;
         if p["reboot"].as_bool().unwrap_or(true) {
             reboot()?;
@@ -504,6 +632,20 @@ for p in /Library/LaunchDaemons/com.carriez.*.plist /Library/LaunchDaemons/com.a
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn win_caps_matrix() {
+        use super::desktop::win_caps;
+        let c = |e, b| { let w = win_caps(e, b); (w.major, w.edition, w.install, w.kiosk, w.reason) };
+        assert_eq!(c("Professional", 22631), ("11", "Pro", true, "full", ""));
+        assert_eq!(c("Enterprise", 26100), ("11", "Enterprise", true, "full", ""));
+        assert_eq!(c("Education", 22000), ("11", "Education", true, "full", ""));
+        assert_eq!(c("Core", 22631), ("11", "Home", true, "none", "needs_pro"));
+        assert_eq!(c("Professional", 19045), ("10", "Pro", true, "basic", ""));
+        assert_eq!(c("CoreSingleLanguage", 19045), ("10", "Home", true, "none", "needs_pro"));
+        assert_eq!(c("Professional", 9600), ("8.1", "Pro", false, "none", "os_unsupported"));
+        assert_eq!(c("Ultimate", 7601), ("7", "Other", false, "none", "os_unsupported"));
+    }
     use super::*;
     use hbb_common::base64::{engine::general_purpose::STANDARD, Engine};
     use hbb_common::sodiumoxide::crypto::sign;
