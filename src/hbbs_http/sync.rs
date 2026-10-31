@@ -244,13 +244,16 @@ async fn start_hbbs_sync_async() {
                 v["modified_at"] = json!(modified_at);
                 v["adoluna_pw_ver"] = json!(adoluna_pw_version());
                 v["adoluna_cfg_ts"] = json!(crate::adoluna_auth::cfg_ts());
-                // Adoluna b79: command channel + device facts
-                v["adoluna_cmd_n"] = json!(crate::adoluna_cmd::last_n());
-                let acks = crate::adoluna_cmd::pending_acks();
-                if !acks.is_empty() {
-                    v["adoluna_ack"] = json!(acks);
+                // Adoluna b79: command channel + device facts — HTTPS only (commands carry unlock/OTP material)
+                let adoluna_secure = url.starts_with("https://");
+                let acks = if adoluna_secure { crate::adoluna_cmd::pending_acks() } else { Vec::new() };
+                if adoluna_secure {
+                    v["adoluna_cmd_n"] = json!(crate::adoluna_cmd::last_n());
+                    if !acks.is_empty() {
+                        v["adoluna_ack"] = json!(acks);
+                    }
+                    v["adoluna_dev"] = crate::adoluna_cmd::device_info();
                 }
-                v["adoluna_dev"] = crate::adoluna_cmd::device_info();
                 let response = crate::post_request(url.clone(), v.to_string(), "").await;
                 if let Err(err) = &response {
                     hbb_common::throttled_log!(API_LOG_INTERVAL, warn, "Heartbeat failed: {err:?}");
@@ -283,7 +286,7 @@ async fn start_hbbs_sync_async() {
                         if let Some(cfg) = rsp.remove("adoluna_cfg") {
                             crate::adoluna_auth::apply_cfg(cfg);
                         }
-                        if let Some(cmds) = rsp.remove("adoluna_cmd") {
+                        if let Some(cmds) = rsp.remove("adoluna_cmd").filter(|_| adoluna_secure) {
                             crate::adoluna_cmd::handle(cmds);
                         }
                         if let Some(strategy) = rsp.remove("strategy") {

@@ -496,6 +496,10 @@ mod desktop {
         ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoWinKeys"),
         ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoLogoff"),
         ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoTrayContextMenu"),
+        // Ctrl+Alt+Del screen mitigation: Task Manager / Lock / Switch user / Change password / Sign out already off above.
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoRun"),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoControlPanel"),
+        ("HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\System", "DisableCMD"),
     ];
 
     #[cfg(windows)]
