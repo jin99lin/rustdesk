@@ -84,3 +84,39 @@
 .adm-dlg .adm-kv{display:flex;justify-content:space-between;gap:16px;padding:8px 0;border-bottom:1px solid #F0F1F3}
 .adm-dlg .hidden{display:none}
 .adm-dlg input[type=password]{display:block;width:100%;margin-top:10px}
+/* batch 5 (Jay 10/30): white sidebar like Adoluna Pay, Lucide icons, collapsible (spec: 设计助手 menu-icons/white-sidebar-advice.md) */
+.adm-ic{flex:none;vertical-align:middle}
+html.adm-white .app-main,html.adm-white .app-container{background:#F5F6F8}
+html.adm-white .app-left{position:relative;width:220px!important;--el-aside-width:220px!important;background:#fff!important;border-right:1px solid #E5E7EB;transition:width .15s;overflow:hidden;display:flex;flex-direction:column;height:100vh}
+html.adm-white.adm-col .app-left{width:64px!important;--el-aside-width:64px!important}
+html.adm-white .app-left .el-scrollbar,html.adm-white .app-left .scroll-sidebar,html.adm-white .app-left .el-scrollbar__view{background:#fff!important}
+html.adm-white .app-left .el-scrollbar{flex:1;min-height:0}html.adm-white .app-left .el-scrollbar__wrap{height:auto!important;max-height:calc(100vh - 113px)}
+html.adm-white .app-header .ex-icon,html.adm-white .app-header .header-logo{display:none!important}
+#adm-logo{flex:none;height:56px;display:flex;align-items:center;gap:10px;padding:0 18px;border-bottom:1px solid #E5E7EB;cursor:pointer;box-sizing:border-box;white-space:nowrap;overflow:hidden}
+#adm-logo .adm-lg-a{flex:none;width:28px;height:28px;border-radius:6px;background:#C8102E;color:#fff;font-weight:700;font-size:17px;display:inline-flex;align-items:center;justify-content:center}
+#adm-logo .adm-lg-t{font-weight:700;font-size:16px;color:#1F2328}
+html.adm-col #adm-logo{padding:0 18px}html.adm-col #adm-logo .adm-lg-t{display:none}
+#adm-nav{padding:8px 0;font-size:14px;color:#5F6670}
+#adm-nav .adm-ni{position:relative;display:flex;align-items:center;gap:12px;height:44px;padding:0 19px 0 18px;cursor:pointer;border-left:3px solid transparent;color:#5F6670;white-space:nowrap}
+#adm-nav .adm-ni:hover{background:#F5F6F8;color:#1F2328}
+#adm-nav .adm-ni.on{background:#FDECEE;color:#C8102E;border-left-color:#C8102E;font-weight:600}
+#adm-nav .adm-nt{flex:1;overflow:hidden}
+#adm-nav .adm-nsep{height:1px;background:#E5E7EB;margin:8px 0}
+#adm-nav .adm-badge{background:#C8102E}
+html.adm-col #adm-nav .adm-ni{padding:0 0 0 19px}html.adm-col #adm-nav .adm-nt{display:none}
+html.adm-col #adm-nav .adm-badge{position:absolute;left:34px;top:9px;min-width:0;width:9px;height:9px;padding:0;border-radius:50%;font-size:0;border:2px solid #fff;box-sizing:content-box}
+#adm-tg{flex:none;height:56px;display:flex;align-items:center;gap:12px;padding:0 21px;border-top:1px solid #E5E7EB;color:#5F6670;cursor:pointer;font-size:14px;white-space:nowrap;background:#fff;margin-top:auto}
+#adm-tg:hover{background:#F5F6F8;color:#1F2328}html.adm-col #adm-tg span{display:none}
+#adm-tip{position:fixed;transform:translateY(-50%);background:#1F2328;color:#fff;font-size:12px;padding:4px 9px;border-radius:6px;z-index:4000;pointer-events:none;white-space:nowrap}
+#adm-um .adm-umm div[data-u]{display:flex;align-items:center;gap:8px}#adm-um .adm-umm .adm-ic{color:#5F6670}#adm-um .adm-umm .danger .adm-ic{color:#C62828}
+/* pick modal */
+.adm-dlg .adm-pkh{display:flex;gap:6px;align-items:center}.adm-dlg .adm-pkh input{flex:1;margin:0!important;border:1px solid #DCDFE4;border-radius:6px;height:32px;padding:0 10px}
+.adm-dlg .adm-pkn{font-size:12px;color:#C8102E;margin:8px 0 6px;font-weight:600}
+.adm-dlg .adm-pkl{max-height:360px;overflow:auto;border:1px solid #E6E8EB;border-radius:8px}
+.adm-dlg .adm-pkr{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #F0F1F3;cursor:pointer;font-size:13px}.adm-dlg .adm-pkr:last-child{border-bottom:0}
+.adm-dlg .adm-pkr:hover{background:#F6F7F9}.adm-dlg .adm-pkr.on{background:#FFF5F6}.adm-dlg .adm-pkt{flex:1;min-width:0}.adm-dlg .adm-pkc{min-width:52px;text-align:right}
+.adm-dlg .adm-warn{color:#B45309;margin-top:4px}.adm-dlg .adm-dfoot{align-items:center}
+.adm-dlg input#adm-sn,.adm-dlg input#adm-se,.adm-dlg input#adm-su,.adm-dlg input#adm-pn1,.adm-dlg input#adm-pe1{display:block;width:100%}
+#adm tr.adm-off td{color:#9CA3AF;background:#FAFAFB}#adm tr.adm-off b{color:#9CA3AF}
+.adm-offc{font-size:12px;padding:1px 7px;border-radius:4px;background:#ECEDEF;color:#6B7280;white-space:nowrap}
+#adm .adm-mem .btn{margin-left:8px}

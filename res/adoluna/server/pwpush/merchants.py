@@ -411,6 +411,8 @@ def set_staff(uid, position_ids, is_admin, by, self_uid):
         if is_admin is not None:
             if int(uid) == int(self_uid) and not is_admin:
                 raise Err("self_admin")
+            if not is_admin:
+                _need_other_admin(uid)
             db = rw(); db.execute("update users set is_admin=?, updated_at=? where id=?", (1 if is_admin else 0, ts(), int(uid))); db.commit(); db.close()
         if position_ids is not None:
             with md() as c:
@@ -418,6 +420,92 @@ def set_staff(uid, position_ids, is_admin, by, self_uid):
                 for p in position_ids:
                     c.execute("insert or ignore into pos_members values(?,?)", (int(p), int(uid)))
     log(by, "", "", "员工 #%s 职位 %s 管理员=%s" % (uid, position_ids, is_admin))
+
+# ---------- staff lifecycle (batch 5, Jay 10/30) ----------
+ACTIVE, DISABLED = 1, 2  # rustdesk-api users.status
+
+def _need_other_admin(uid):
+    """never leave the system without an active admin"""
+    db = ro()
+    try:
+        n = db.execute("select count(*) from users where is_admin=1 and status=1 and id<>?", (int(uid),)).fetchone()[0]
+    finally:
+        db.close()
+    if n < 1:
+        raise Err("last_admin")
+
+def set_status(uid, active, by, self_uid):
+    uid = int(uid)
+    if uid == int(self_uid):
+        raise Err("self")
+    with LOCK:
+        if not active:
+            _need_other_admin(uid)
+        db = rw()
+        try:
+            if not db.execute("select 1 from users where id=?", (uid,)).fetchone():
+                raise Err("user")
+            db.execute("update users set status=?, updated_at=? where id=?", (ACTIVE if active else DISABLED, ts(), uid))
+            if not active:
+                db.execute("delete from user_tokens where user_id=?", (uid,))  # signed out everywhere, now
+            db.commit()
+        finally:
+            db.close()
+    log(by, "", "", "员工 #%s %s" % (uid, "启用" if active else "停用"))
+
+def delete_user(uid, by, self_uid):
+    """only deactivated staff; logs (audit, login_logs, audit_conns) are kept"""
+    uid = int(uid)
+    if uid == int(self_uid):
+        raise Err("self")
+    with LOCK:
+        db = rw()
+        try:
+            r = db.execute("select username, status from users where id=?", (uid,)).fetchone()
+            if not r:
+                raise Err("user")
+            if r[1] == ACTIVE:
+                raise Err("still_active")
+            col = md().execute("select collection_id from staff_ab where user_id=?", (uid,)).fetchone()
+            for t in ("user_tokens", "tags", "address_books", "address_book_collections", "address_book_collection_rules", "user_thirds"):
+                try:
+                    db.execute("delete from %s where user_id=?" % t, (uid,))
+                except sqlite3.OperationalError:
+                    pass
+            db.execute("delete from users where id=?", (uid,)); db.commit()
+        finally:
+            db.close()
+        with md() as c:
+            c.execute("delete from pos_members where user_id=?", (uid,)); c.execute("delete from staff_ab where user_id=?", (uid,))
+            c.execute("delete from grants where subj_kind='user' and subj=?", (str(uid),))
+    log(by, "", "", "删除员工 #%s %s" % (uid, r[0]))
+
+def update_user(uid, nickname, email, username, by):
+    uid = int(uid); sets, args = [], []
+    if nickname is not None:
+        sets.append("nickname=?"); args.append(str(nickname).strip()[:60])
+    if email is not None:
+        e = str(email).strip()[:200]
+        if e and ("@" not in e or " " in e):
+            raise Err("email")
+        sets.append("email=?"); args.append(e)
+    if username is not None:
+        un = str(username).strip()
+        import re
+        if not re.match(r"^[A-Za-z0-9_.@-]{2,32}$", un):
+            raise Err("username")
+        sets.append("username=?"); args.append(un)
+    if not sets:
+        return
+    with LOCK:
+        db = rw()
+        try:
+            if username is not None and db.execute("select 1 from users where lower(username)=lower(?) and id<>?", (un, uid)).fetchone():
+                raise Err("dup")
+            db.execute("update users set %s, updated_at=? where id=?" % ", ".join(sets), args + [ts(), uid]); db.commit()
+        finally:
+            db.close()
+    log(by, "", "", "修改员工 #%s 资料%s" % (uid, "（含用户名 → %s）" % un if username is not None else ""))
 
 def peer_merchant_all():
     peer_merchant("0")

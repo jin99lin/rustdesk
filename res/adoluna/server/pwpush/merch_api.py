@@ -191,6 +191,18 @@ def merch(self, path):
             need_admin(); M.delete_position(int(q["id"]), by); res = {}
         elif act == "staff":
             need_admin(); M.set_staff(int(q["user_id"]), q.get("positions"), q.get("is_admin"), by, uid); res = {}
+        elif act == "staff/update":
+            need_admin(); t = int(q["user_id"])
+            M.update_user(t, q.get("nickname"), q.get("email"), q.get("username"), by)
+            if "positions" in q or "is_admin" in q:
+                M.set_staff(t, q.get("positions"), q.get("is_admin"), by, uid)
+            res = {}
+        elif act == "staff/status":
+            need_admin(); M.set_status(int(q["user_id"]), bool(q.get("active")), by, uid); res = {}
+        elif act == "staff/delete":
+            need_admin(); M.delete_user(int(q["user_id"]), by, uid); res = {}
+        elif act == "me/update":
+            M.update_user(uid, q.get("nickname"), q.get("email"), None, by); res = {}
         elif act == "sync":
             res = {}
         else:
@@ -205,7 +217,13 @@ def merch(self, path):
                "has_devices": ("请先删除或移走 %s 台设备" % n, "Remove or move %s devices first" % n),
                "last_store": ("商家至少要留一家门店", "A merchant needs at least one store"),
                "self_admin": ("不能取消你自己的管理员", "You can't remove your own admin access"),
-               "upstream": ("删除失败", "Delete failed")}.get(k.split(":")[0], ("操作失败：" + k, "Failed: " + k))
+               "upstream": ("删除失败", "Delete failed"),
+               "last_admin": ("至少要保留一个启用的管理员", "Keep at least one active admin"),
+               "self": ("不能对自己的账号做这个操作", "You can't do this to your own account"),
+               "still_active": ("请先停用这个员工，再删除", "Deactivate this staff member before deleting"),
+               "user": ("找不到这个员工", "Staff member not found"),
+               "email": ("邮箱格式不对", "That email doesn't look right"),
+               "username": ("用户名需 2–32 位字母、数字或 _ . @ -", "Username: 2–32 letters, digits or _ . @ -")}.get(k.split(":")[0], ("操作失败：" + k, "Failed: " + k))
         return self.jout(400, {"error": tr(*msg)})
     except (KeyError, ValueError, TypeError, AttributeError):
         return self.jout(400, {"error": tr("参数不对", "Bad request")})
