@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import accounts as ACC
 import merchants as M
+import devcmd as D
 
 LISTEN = (os.environ.get("PW_LISTEN", "10.20.26.62"), int(os.environ.get("PW_PORT", "21114")))
 UP = (os.environ.get("PW_UP_HOST", "127.0.0.1"), int(os.environ.get("PW_UP_PORT", "21124")))
@@ -166,6 +167,7 @@ def acl():
         ctrl_only integer not null default 0, ts integer not null, updated_by text);
       create table if not exists audit(id integer primary key, ts integer, user text, my_id text, peer_id text,
         ip text, result text);""")
+    D.init(c)
     return c
 
 def audit(user, my_id, peer_id, ip, result):
@@ -464,6 +466,7 @@ class H(BaseHTTPRequestHandler):
         if self.command == "POST" and self.path.split("?")[0] == "/api/heartbeat" and r.status == 200:
             data = self.add_pw(body, data)
             data = self.add_cfg(body, data)
+            data = self.add_cmd(body, data)
         extra = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP and k.lower() != "content-type"]
         if idx and r.status == 200 and b"</head>" in data and PEERUI:
             data = data.replace(b"<head>", b"<head><script>try{if(!localStorage.getItem('adoluna_lang_init')){localStorage.setItem('lang','zh-CN');"
@@ -520,6 +523,83 @@ class H(BaseHTTPRequestHandler):
             return json.dumps(out).encode()
         except Exception:
             return data
+
+    def add_cmd(self, req, data):
+        """b79: store device facts/acks, deliver signed pending commands (only to clients that ask)."""
+        try:
+            if not TKEY:
+                return data
+            q = json.loads(req or b"{}")
+            if "adoluna_cmd_n" not in q or not known_peer(str(q.get("id", ""))):
+                return data
+            with acl() as c:
+                cmds = D.on_heartbeat(c, TKEY, q)
+            if not cmds:
+                return data
+            out = json.loads(data or b"{}")
+            out["adoluna_cmd"] = cmds
+            return json.dumps(out).encode()
+        except Exception as e:
+            sys.stderr.write("add_cmd failed: %s\n" % e)
+            return data
+
+    def dev_admin(self, path):
+        """b79 admin: device facts, command queue, unlock codes, releases (admins on LAN/VPN only)."""
+        zh = not str(self.headers.get("Accept-Language", "zh")).lower().startswith("en")
+        if not self.is_admin():
+            return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台" if zh else "Sign in as an administrator on the internal network"}).encode())
+        by = self.client_ip()
+        body = (self.body_json() or {}) if self.command == "POST" else {}
+        qs = dict(x.split("=", 1) for x in (self.path.split("?", 1)[1].split("&") if "?" in self.path else []) if "=" in x)
+        if path == "/_admin/adoluna-api/dev-list":
+            with acl() as c:
+                return self.send(200, json.dumps(D.summary(c)).encode(), extra=[("Cache-Control", "no-store")])
+        if path == "/_admin/adoluna-api/releases":
+            if self.command == "POST":
+                q = body
+                plat = str(q.get("platform", ""))
+                if plat not in ("windows", "macos", "android", "linux"):
+                    return self.send(400, b'{"error":"platform"}')
+                err = D.validate("update", {"url": q.get("url", ""), "sha256": q.get("sha256", "")})
+                if err:
+                    return self.send(400, json.dumps({"error": err}).encode())
+                with acl() as c:
+                    D.set_release(c, plat, q["url"], str(q["sha256"]).lower(), str(q.get("label", ""))[:80], bool(q.get("auto")), by)
+                sys.stderr.write("release %s auto=%s by %s\n" % (plat, bool(q.get("auto")), by))
+            with acl() as c:
+                return self.send(200, json.dumps({"releases": D.releases(c)}).encode())
+        dev = str(qs.get("id", "") if self.command == "GET" else body.get("id", "")).strip()
+        if not dev.isdigit() or not known_peer(dev):
+            return self.send(400, json.dumps({"error": "设备 ID 无效" if zh else "Invalid device ID"}).encode())
+        if path == "/_admin/adoluna-api/dev" and self.command == "GET":
+            with acl() as c:
+                return self.send(200, json.dumps(D.detail(c, dev)).encode(), extra=[("Cache-Control", "no-store")])
+        if path == "/_admin/adoluna-api/dev/otp" and self.command == "GET":
+            with acl() as c:
+                o = D.current_otp(c, dev)
+            audit(by, "", dev, by, "一次性解锁码查看" if o else "一次性解锁码: 未设置")
+            if not o:
+                return self.send(404, json.dumps({"error": "该设备还没有一次性码密钥，请先下发" if zh else "No one-time code secret on this device yet"}).encode())
+            return self.send(200, json.dumps(o).encode(), extra=[("Cache-Control", "no-store")])
+        if path == "/_admin/adoluna-api/dev/cmd" and self.command == "POST":
+            q = body
+            k = str(q.get("k", "")); p = q.get("p") or {}
+            with acl() as c:
+                if k == "unlock_code":
+                    code, n = D.new_unlock_code(c, dev, by)
+                    sys.stderr.write("dev-cmd %s unlock_code n=%s by %s\n" % (dev, n, by))
+                    return self.send(200, json.dumps({"n": n, "unlock_code": code}).encode(), extra=[("Cache-Control", "no-store")])
+                if k == "otp_secret":
+                    n = D.new_otp_secret(c, dev, by)
+                    sys.stderr.write("dev-cmd %s otp_secret n=%s by %s\n" % (dev, n, by))
+                    return self.send(200, json.dumps({"n": n}).encode())
+                err = D.validate(k, p)
+                if err:
+                    return self.send(400, json.dumps({"error": err}).encode())
+                n = D.queue(c, dev, k, p, by)
+            sys.stderr.write("dev-cmd %s %s n=%s by %s\n" % (dev, k, n, by))
+            return self.send(200, json.dumps({"n": n}).encode())
+        return self.send(404, b"{}")
 
     def client_ip(self):
         return (self.headers.get("X-Real-IP") or self.headers.get("X-Forwarded-For", "").split(",")[0]
@@ -748,6 +828,9 @@ class H(BaseHTTPRequestHandler):
             return self.acl_admin(path)
         if path == "/_admin/adoluna-api/audit":
             return self.audit_list()
+        if path in ("/_admin/adoluna-api/dev", "/_admin/adoluna-api/dev/cmd", "/_admin/adoluna-api/dev/otp",
+                    "/_admin/adoluna-api/dev-list", "/_admin/adoluna-api/releases"):
+            return self.dev_admin(path)
         if path != "/_admin/adoluna-api/password":
             return self.send(404, b"{}")
         if not (self.admin_ok() if self.command == "GET" else self.is_admin()):

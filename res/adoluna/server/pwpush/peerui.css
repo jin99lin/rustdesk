@@ -86,3 +86,5 @@
 #adp-pw a{color:#C62828}
 #adp-au{overflow-x:auto}.adp-at td:last-child{min-width:140px}.adp-at td{white-space:nowrap}.adp-at td:last-child{white-space:normal}
 #adp .adp-at td,#adp .adp-at th{padding:4px 6px;font-size:12px}
+.adp-dlg .adp-ck{display:flex!important;gap:8px;align-items:center;justify-content:flex-start;text-align:left;width:100%}
+.adp-dlg .adp-ck input[type=checkbox]{width:16px!important;height:16px!important;margin:0;flex:none}
