@@ -12,6 +12,7 @@ Add-Type -Name W -Namespace A -MemberDefinition @'
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
 [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr h, bool a);
 [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 '@
 $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 $zh = [Globalization.CultureInfo]::CurrentUICulture.Name -like 'zh*'
@@ -35,13 +36,29 @@ function CodeDialog {
   $script:dlg = $true
   $f = New-Object Windows.Forms.Form
   $f.Text = 'Adoluna Support'; $f.TopMost = $true; $f.StartPosition = 'CenterScreen'; $f.FormBorderStyle = 'FixedDialog'
-  $f.MinimizeBox = $false; $f.MaximizeBox = $false; $f.ClientSize = New-Object Drawing.Size(380, 210); $f.Font = New-Object Drawing.Font('Microsoft YaHei UI', 11)
+  $f.MinimizeBox = $false; $f.MaximizeBox = $false; $f.ClientSize = New-Object Drawing.Size(380, 398); $f.Font = New-Object Drawing.Font('Microsoft YaHei UI', 11)
   $t = New-Object Windows.Forms.Label; $t.Text = (L '临时解锁 30 分钟：输入解锁码（6 位）或一次性码（8 位）' 'Unlock for 30 min: enter the unlock code (6 digits) or one-time code (8 digits)')
   $t.SetBounds(16, 12, 350, 50)
   $e = New-Object Windows.Forms.TextBox; $e.SetBounds(16, 66, 348, 30); $e.MaxLength = 8; $e.Font = New-Object Drawing.Font('Consolas', 16)
-  $m = New-Object Windows.Forms.Label; $m.SetBounds(16, 108, 348, 26); $m.ForeColor = [Drawing.Color]::FromArgb(215, 38, 46)
-  $ok = New-Object Windows.Forms.Button; $ok.Text = (L '解锁' 'Unlock'); $ok.SetBounds(196, 150, 80, 36)
-  $cn = New-Object Windows.Forms.Button; $cn.Text = (L '取消' 'Cancel'); $cn.SetBounds(284, 150, 80, 36); $cn.DialogResult = 'Cancel'
+  # on-screen numeric keypad (touch input on the kiosk; physical keyboard still works)
+  $keys = @('1','2','3','4','5','6','7','8','9', (L '退格' 'Back'), '0', (L '清除' 'Clear'))
+  for ($ki = 0; $ki -lt 12; $ki++) {
+    $kb = New-Object Windows.Forms.Button
+    $kb.Text = $keys[$ki]; $kb.TabStop = $false
+    $kb.Font = New-Object Drawing.Font('Microsoft YaHei UI', 14)
+    $kb.SetBounds((16 + ($ki % 3) * 118), (104 + [Math]::Floor($ki / 3) * 52), 112, 44)
+    if ($ki -eq 9) {
+      $kb.Add_Click({ if ($e.Text.Length -gt 0) { $e.Text = $e.Text.Substring(0, $e.Text.Length - 1) }; $e.SelectionStart = $e.Text.Length; $e.Focus() })
+    } elseif ($ki -eq 11) {
+      $kb.Add_Click({ $e.Text = ''; $e.Focus() })
+    } else {
+      $kb.Add_Click({ if ($e.Text.Length -lt $e.MaxLength) { $e.AppendText($this.Text) }; $e.SelectionStart = $e.Text.Length; $e.Focus() })
+    }
+    $f.Controls.Add($kb)
+  }
+  $m = New-Object Windows.Forms.Label; $m.SetBounds(16, 312, 348, 26); $m.ForeColor = [Drawing.Color]::FromArgb(215, 38, 46)
+  $ok = New-Object Windows.Forms.Button; $ok.Text = (L '解锁' 'Unlock'); $ok.SetBounds(196, 346, 80, 36)
+  $cn = New-Object Windows.Forms.Button; $cn.Text = (L '取消' 'Cancel'); $cn.SetBounds(284, 346, 80, 36); $cn.DialogResult = 'Cancel'
   $f.AcceptButton = $ok; $f.CancelButton = $cn
   $ok.Add_Click({
     $code = $e.Text.Trim()
@@ -62,7 +79,7 @@ function CodeDialog {
       default { $m.Text = (L 'Adoluna Support 服务未响应' 'Adoluna Support service did not respond') }
     }
   })
-  $f.Controls.AddRange(@($t, $e, $m, $ok, $cn)); $f.Add_Shown({ $f.Activate(); $e.Focus() })
+  $f.Controls.AddRange(@($t, $e, $m, $ok, $cn)); $f.Add_Shown({ $f.TopMost = $true; $f.Activate(); [A.W]::SetForegroundWindow($f.Handle) | Out-Null; $e.Focus() })
   $f.ShowDialog() | Out-Null; $f.Dispose(); $script:dlg = $false
 }
 
@@ -95,6 +112,8 @@ $script:tick = 0
 $tm = New-Object Windows.Forms.Timer; $tm.Interval = 1000
 $tm.Add_Tick({
   $script:tick++
+  # pause the foreground watchdog while the unlock dialog is open so it can't steal focus
+  if ($script:dlg) { return }
   $u = PauseUntil; $n = Now
   if ($u -gt $n) {
     Taskbar 5; $s = $u - $n

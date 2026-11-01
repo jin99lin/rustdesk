@@ -1312,6 +1312,13 @@ impl Connection {
         }
         #[cfg(target_os = "linux")]
         clear_remapped_keycode();
+        // Adoluna: ensure the touch-preserving input block is released when the
+        // session's input thread ends, so local touch/keyboard always come back
+        // on disconnect and the hook thread is torn down.
+        #[cfg(target_os = "windows")]
+        if block_input_mode {
+            let _ = crate::platform::block_input(false);
+        }
         log::debug!("Input thread exited");
     }
 

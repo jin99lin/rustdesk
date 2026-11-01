@@ -1903,14 +1903,107 @@ pub fn toggle_blank_screen(v: bool) {
     }
 }
 
-pub fn block_input(v: bool) -> (bool, String) {
-    let v = if v { TRUE } else { FALSE };
-    unsafe {
-        if BlockInput(v) == TRUE {
-            (true, "".to_owned())
-        } else {
-            (false, format!("Error: {}", io::Error::last_os_error()))
+// --- Adoluna: touch/pen-preserving input block ----------------------------
+// Win32 BlockInput(TRUE) freezes ALL physical input on Win10, including the
+// merchant's touchscreen, for the whole remote session. Instead we install
+// low-level mouse + keyboard hooks that swallow only *physical* mouse/keyboard
+// events and let *injected* (remote) events and *touch/pen* events through, so
+// the merchant keeps using the touchscreen while a technician has "block input"
+// turned on. Blocking engages ONLY on an explicit technician toggle
+// (MessageInput::BlockOn); it is never read from a saved option or a default,
+// so a plain remote session never blocks local touch.
+static ADOLUNA_BLK_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ADOLUNA_BLK_TID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const ADOLUNA_WM_STOP: UINT = WM_USER + 0x51;
+
+unsafe extern "system" fn adoluna_ll_mouse(code: c_int, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION && ADOLUNA_BLK_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+        let ms = &*(lparam as *const MSLLHOOKSTRUCT);
+        let injected = (ms.flags & LLMHF_INJECTED) != 0;
+        // Touch/pen input promoted to legacy mouse messages carries this signature.
+        let from_touch_or_pen = (ms.dwExtraInfo & 0xFFFFFF80) == 0xFF515700;
+        if !injected && !from_touch_or_pen {
+            return 1; // swallow physical mouse only
         }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+unsafe extern "system" fn adoluna_ll_kbd(code: c_int, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION && ADOLUNA_BLK_ACTIVE.load(std::sync::atomic::Ordering::SeqCst) {
+        let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
+        let injected = (kb.flags & LLKHF_INJECTED) != 0;
+        if !injected {
+            return 1; // swallow physical keyboard only
+        }
+    }
+    CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+fn adoluna_block_start() -> (bool, String) {
+    use std::sync::atomic::Ordering::SeqCst;
+    if ADOLUNA_BLK_TID.load(SeqCst) != 0 {
+        ADOLUNA_BLK_ACTIVE.store(true, SeqCst);
+        return (true, "".to_owned());
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<(bool, String)>();
+    std::thread::spawn(move || unsafe {
+        let hm = SetWindowsHookExW(WH_MOUSE_LL, Some(adoluna_ll_mouse), std::ptr::null_mut(), 0);
+        let hk = SetWindowsHookExW(WH_KEYBOARD_LL, Some(adoluna_ll_kbd), std::ptr::null_mut(), 0);
+        if hm.is_null() || hk.is_null() {
+            let e = io::Error::last_os_error();
+            if !hm.is_null() {
+                UnhookWindowsHookEx(hm);
+            }
+            if !hk.is_null() {
+                UnhookWindowsHookEx(hk);
+            }
+            let _ = tx.send((false, format!("block_input hook install failed: {}", e)));
+            return;
+        }
+        // Force the message queue to exist so PostThreadMessageW can reach us.
+        let mut msg: MSG = std::mem::zeroed();
+        PeekMessageW(&mut msg, std::ptr::null_mut(), WM_USER, WM_USER, PM_NOREMOVE);
+        ADOLUNA_BLK_TID.store(winapi::um::processthreadsapi::GetCurrentThreadId(), SeqCst);
+        ADOLUNA_BLK_ACTIVE.store(true, SeqCst);
+        let _ = tx.send((true, "".to_owned()));
+        loop {
+            let r = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
+            if r == 0 || r == -1 {
+                break;
+            }
+            if msg.message == ADOLUNA_WM_STOP {
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        UnhookWindowsHookEx(hm);
+        UnhookWindowsHookEx(hk);
+        ADOLUNA_BLK_ACTIVE.store(false, SeqCst);
+        ADOLUNA_BLK_TID.store(0, SeqCst);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+        Ok(r) => r,
+        Err(_) => (false, "block_input thread did not start".to_owned()),
+    }
+}
+
+pub fn block_input(v: bool) -> (bool, String) {
+    use std::sync::atomic::Ordering::SeqCst;
+    if v {
+        // Fail-safe: if the hooks cannot install we return an error and block
+        // nothing, so a merchant kiosk is never locked out of its own touchscreen.
+        adoluna_block_start()
+    } else {
+        ADOLUNA_BLK_ACTIVE.store(false, SeqCst);
+        let tid = ADOLUNA_BLK_TID.load(SeqCst);
+        if tid != 0 {
+            unsafe {
+                PostThreadMessageW(tid, ADOLUNA_WM_STOP, 0, 0);
+            }
+        }
+        (true, "".to_owned())
     }
 }
 
