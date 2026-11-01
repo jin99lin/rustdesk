@@ -780,6 +780,12 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("RustDesk could not load a GStreamer component needed for screen capture ({})", "RustDesk 无法加载屏幕捕获所需的 GStreamer 组件 ({})"),
         ("Relay fallback delay in seconds", "回落到中继前的等待时间（秒）"),
         ("relay-fallback-delay-tip", "已经建立的中继连接会等待直连的 WebRTC 多久，超过这个时间就改用中继。调大可以让较慢的直连有更多机会胜出；调小则在无法直连的网络上更快回落到中继。留空表示使用默认值 2.5 秒。"),
-        ("To start a voice call, enable \"Audio capture\" on the \"Screen share\" page.", "开始语音通话前请在\"仅共享屏幕\"页面启用\"音频录制\"。")
+        ("To start a voice call, enable \"Audio capture\" on the \"Screen share\" page.", "开始语音通话前请在\"仅共享屏幕\"页面启用\"音频录制\"。"),
+        ("All devices", "全部设备"),
+        ("adoluna-staff-pin-title", "请输入员工 PIN"),
+        ("adoluna-staff-pin-wrong", "员工 PIN 错误"),
+        ("adoluna-staff-pin-locked", "错误次数过多，请 5 分钟后再试"),
+        ("adoluna-staff-pin-not-set", "后台还没有设置员工 PIN，无法解锁"),
+        ("Advanced settings unlocked", "已解锁高级设置"),
     ].iter().cloned().collect();
 }

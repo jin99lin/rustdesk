@@ -121,10 +121,23 @@ class _PeerCardState extends State<_PeerCard>
         );
       },
       child: gestureDetector(
-          child: Obx(() => peerCardUiType.value == PeerUiType.grid
-              ? _buildPeerCard(context, peer, deco)
-              : _buildPeerTile(context, peer, deco))),
+          child: Opacity(
+              opacity: _adolunaAb && !peer.online ? 0.5 : 1.0,
+              child: Obx(() => peerCardUiType.value == PeerUiType.grid
+                  ? _buildPeerCard(context, peer, deco)
+                  : _buildPeerTile(context, peer, deco)))),
     );
+  }
+
+  // Adoluna b80: technician address book shows "store · device name", ID as subtitle, offline dimmed.
+  bool get _adolunaAb => widget.tab == PeerTabIndex.ab;
+  String _adolunaTitle(Peer peer) {
+    final n = peer.alias.isEmpty ? formatID(peer.id) : peer.alias;
+    if (_adolunaAb && peer.tags.isNotEmpty) {
+      final store = peer.tags.first.toString();
+      if (store.isNotEmpty && store != n) return '$store · $n';
+    }
+    return n;
   }
 
   bool _showNote(Peer peer) {
@@ -132,9 +145,11 @@ class _PeerCardState extends State<_PeerCard>
   }
 
   makeChild(bool isPortrait, Peer peer) {
-    final name = hideUsernameOnCard == true
-        ? peer.hostname
-        : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
+    final name = _adolunaAb
+        ? formatID(peer.id)
+        : hideUsernameOnCard == true
+            ? peer.hostname
+            : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
     final greyStyle = TextStyle(
         fontSize: 11,
         color: Theme.of(context).textTheme.titleLarge?.color?.withOpacity(0.6));
@@ -186,7 +201,7 @@ class _PeerCardState extends State<_PeerCard>
                         getOnline(isPortrait ? 4 : 8, peer.online),
                         Expanded(
                             child: Text(
-                          peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
+                          _adolunaTitle(peer),
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleSmall,
                         )),
@@ -282,9 +297,11 @@ class _PeerCardState extends State<_PeerCard>
       BuildContext context, Peer peer, Rx<BoxDecoration?> deco) {
     hideUsernameOnCard ??=
         bind.mainGetBuildinOption(key: kHideUsernameOnCard) == 'Y';
-    final name = hideUsernameOnCard == true
-        ? peer.hostname
-        : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
+    final name = _adolunaAb
+        ? formatID(peer.id)
+        : hideUsernameOnCard == true
+            ? peer.hostname
+            : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
     final child = Card(
       color: Colors.transparent,
       elevation: 0,
@@ -368,7 +385,7 @@ class _PeerCardState extends State<_PeerCard>
                         getOnline(8, peer.online),
                         Expanded(
                             child: Text(
-                          peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
+                          _adolunaTitle(peer),
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleSmall,
                         )),

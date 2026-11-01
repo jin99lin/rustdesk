@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:crypto/crypto.dart' as crypto;
 import 'dart:math';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
@@ -1690,6 +1691,11 @@ Future<bool> matchPeer(
     return true;
   }
   if (peer.alias.toLowerCase().contains(searchText)) {
+    return true;
+  }
+  // Adoluna b80: store name (address-book tag) is searchable
+  if (peerTabIndex == PeerTabIndex.ab &&
+      peer.tags.any((t) => t.toString().toLowerCase().contains(searchText))) {
     return true;
   }
   if (peerTabShowNote(peerTabIndex) &&
@@ -4303,7 +4309,13 @@ final List<DateTime> _adolunaTaps = [];
 bool adolunaHide(String key) =>
     !adolunaStaff.value && bind.mainGetBuildinOption(key: key) == 'Y';
 
-/// Tap the version text 7 times within 5 seconds to reveal advanced settings until restart.
+/// Tap the version text 7 times within 5 seconds, then enter the staff PIN (set in the admin backend,
+/// delivered only as a salted PBKDF2 hash over the signed HTTPS command channel) to reveal advanced
+/// settings until restart. No PIN delivered yet => no unlock.
+const _kAdolunaPinOpt = 'adoluna-staff-pin';
+int _adolunaPinFails = 0;
+DateTime? _adolunaPinLockedUntil;
+
 void adolunaVersionTap() {
   if (adolunaStaff.value) return;
   final now = DateTime.now();
@@ -4311,9 +4323,101 @@ void adolunaVersionTap() {
   _adolunaTaps.removeWhere((t) => now.difference(t).inMilliseconds > 5000);
   if (_adolunaTaps.length >= 7) {
     _adolunaTaps.clear();
-    adolunaStaff.value = true;
-    showToast(translate('Advanced settings unlocked'));
+    _adolunaAskPin();
   } else if (_adolunaTaps.length >= 4) {
     showToast('${7 - _adolunaTaps.length}');
   }
+}
+
+List<int> _adolunaPbkdf2(List<int> pw, List<int> salt, int iters) {
+  final mac = crypto.Hmac(crypto.sha256, pw);
+  var u = mac.convert([...salt, 0, 0, 0, 1]).bytes;
+  final out = List<int>.from(u);
+  for (var i = 1; i < iters; i++) {
+    u = mac.convert(u).bytes;
+    for (var j = 0; j < out.length; j++) {
+      out[j] ^= u[j];
+    }
+  }
+  return out;
+}
+
+List<int> _adolunaHex(String h) => [
+      for (var i = 0; i + 1 < h.length; i += 2)
+        int.parse(h.substring(i, i + 2), radix: 16)
+    ];
+
+bool adolunaCheckPin(String pin, String stored) {
+  try {
+    final m = jsonDecode(stored) as Map<String, dynamic>;
+    final salt = _adolunaHex(m['s'] as String);
+    final want = _adolunaHex(m['h'] as String);
+    final iters = (m['i'] as num).toInt();
+    if (salt.isEmpty || want.length != 32 || iters < 1000 || iters > 1000000) {
+      return false;
+    }
+    final got = _adolunaPbkdf2(utf8.encode(pin.trim()), salt, iters);
+    var diff = 0;
+    for (var i = 0; i < 32; i++) {
+      diff |= got[i] ^ want[i];
+    }
+    return diff == 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+void _adolunaAskPin() async {
+  final stored = await bind.mainGetOption(key: _kAdolunaPinOpt);
+  if (stored.isEmpty) {
+    showToast(translate('adoluna-staff-pin-not-set'));
+    return;
+  }
+  final until = _adolunaPinLockedUntil;
+  if (until != null && DateTime.now().isBefore(until)) {
+    showToast(translate('adoluna-staff-pin-locked'));
+    return;
+  }
+  final ctrl = TextEditingController();
+  var err = '';
+  gFFI.dialogManager.show((setState, close, context) {
+    submit() {
+      if (adolunaCheckPin(ctrl.text, stored)) {
+        _adolunaPinFails = 0;
+        adolunaStaff.value = true;
+        close();
+        showToast(translate('Advanced settings unlocked'));
+      } else {
+        _adolunaPinFails++;
+        if (_adolunaPinFails >= 5) {
+          _adolunaPinFails = 0;
+          _adolunaPinLockedUntil = DateTime.now().add(const Duration(minutes: 5));
+          close();
+          showToast(translate('adoluna-staff-pin-locked'));
+        } else {
+          setState(() => err = translate('adoluna-staff-pin-wrong'));
+        }
+      }
+    }
+
+    return CustomAlertDialog(
+      title: Text(translate('adoluna-staff-pin-title')),
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        obscureText: true,
+        keyboardType: TextInputType.number,
+        decoration: InputDecoration(
+            errorText: err.isEmpty ? null : err,
+            hintText: translate('adoluna-staff-pin-title')),
+        onSubmitted: (_) => submit(),
+      ),
+      actions: [
+        dialogButton('Cancel', onPressed: close, isOutline: true),
+        dialogButton('OK', onPressed: submit),
+      ],
+      onSubmit: submit,
+      onCancel: close,
+    );
+  });
 }

@@ -392,6 +392,10 @@ class _PeersViewState extends State<_PeersView>
       }
     }
 
+    // Adoluna b80: address book — online first, offline last (stable)
+    if (widget.peerTabIndex == PeerTabIndex.ab) {
+      peers = [...peers.where((p) => p.online), ...peers.where((p) => !p.online)];
+    }
     searchText = searchText.trim();
     if (searchText.isEmpty) {
       return peers;

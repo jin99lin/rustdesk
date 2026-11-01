@@ -87,19 +87,8 @@ class _AddressBookState extends State<AddressBook> {
                 height: double.infinity,
                 child: Column(
                   children: [
-                    _buildAbDropdown(),
-                    _buildTagHeader().marginOnly(
-                        left: 8.0,
-                        right: gFFI.abModel.legacyMode.value ? 8.0 : 0,
-                        top: gFFI.abModel.legacyMode.value ? 8.0 : 0),
-                    Expanded(
-                      child: Container(
-                        width: double.infinity,
-                        height: double.infinity,
-                        child: _buildTags(),
-                      ),
-                    ),
-                    _buildAbPermission(),
+                    // Adoluna b80: store list replaces address-book dropdown + Tags panel
+                    Expanded(child: _adolunaStores(false)),
                   ],
                 ),
               ),
@@ -126,12 +115,7 @@ class _AddressBookState extends State<AddressBook> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _buildAbDropdown(),
-                    _buildTagHeader().marginOnly(left: 8.0, right: 0),
-                    Container(
-                      width: double.infinity,
-                      child: _buildTags(),
-                    ),
+                    _adolunaStores(true),
                   ],
                 ),
               ),
@@ -139,6 +123,89 @@ class _AddressBookState extends State<AddressBook> {
         _buildPeersViews()
       ],
     );
+  }
+
+  // ---- Adoluna b80: technician store list ----
+  static const _kManagedAb = '商家 / Merchants';
+
+  void _adolunaPickManaged() {
+    if (gFFI.abModel.legacyMode.value) return;
+    final names = gFFI.abModel.addressBookNames();
+    if (names.contains(_kManagedAb) &&
+        gFFI.abModel.currentName.value != _kManagedAb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (gFFI.abModel.currentName.value != _kManagedAb) {
+          gFFI.abModel.setCurrentName(_kManagedAb);
+        }
+      });
+    }
+  }
+
+  Widget _adolunaStores(bool isPortrait) {
+    return Obx(() {
+      _adolunaPickManaged();
+      final peers = gFFI.abModel.currentAbPeers.toList();
+      final counts = <String, int>{};
+      final online = <String, int>{};
+      for (final p in peers) {
+        for (final t in p.tags) {
+          final k = t.toString();
+          counts[k] = (counts[k] ?? 0) + 1;
+          if (p.online) online[k] = (online[k] ?? 0) + 1;
+        }
+      }
+      final stores = counts.keys.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      final sel = gFFI.abModel.selectedTags;
+      final cur = sel.isEmpty ? '' : sel.first;
+      if (cur.isNotEmpty && !counts.containsKey(cur)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => sel.clear());
+      }
+      void pick(String k) {
+        sel.clear();
+        if (k.isNotEmpty) sel.add(k);
+      }
+
+      final allLabel = translate('All devices');
+      final items = <MapEntry<String, String>>[
+        MapEntry('', '$allLabel (${peers.length})'),
+        ...stores.map((k) => MapEntry(k, '$k (${online[k] ?? 0}/${counts[k]})')),
+      ];
+      if (isPortrait) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+              children: items
+                  .map((e) => ChoiceChip(
+                        label: Text(e.value, style: TextStyle(fontSize: 13)),
+                        selected: cur == e.key,
+                        onSelected: (_) => pick(e.key),
+                      ).marginOnly(right: 6, top: 6))
+                  .toList()),
+        );
+      }
+      return ListView(
+        children: items.map((e) {
+          final selected = cur == e.key;
+          return InkWell(
+            onTap: () => pick(e.key),
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              color: selected
+                  ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
+                  : null,
+              child: Text(e.value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight:
+                          selected ? FontWeight.bold : FontWeight.normal)),
+            ),
+          );
+        }).toList(),
+      );
+    });
   }
 
   Widget _buildAbPermission() {

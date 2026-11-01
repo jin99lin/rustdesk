@@ -101,6 +101,26 @@ pub fn clear_acks(sent: &[Value]) {
 }
 
 /// Called from the heartbeat loop with the `adoluna_cmd` array.
+pub const OPT_STAFF_PIN: &str = "adoluna-staff-pin";
+
+/// Validate a staff_pin payload {"s": salt hex, "h": 32-byte hex, "i": iterations, "v": version}; empty h clears.
+pub fn staff_pin_payload(v: &Value) -> Result<String, String> {
+    if !v.is_object() {
+        return Err("bad payload".into());
+    }
+    let s = v["s"].as_str().unwrap_or("");
+    let h = v["h"].as_str().unwrap_or("");
+    let i = v["i"].as_i64().unwrap_or(0);
+    if h.is_empty() {
+        return Ok(String::new());
+    }
+    let hexok = |x: &str| !x.is_empty() && x.len() % 2 == 0 && x.chars().all(|c| c.is_ascii_hexdigit());
+    if !hexok(s) || s.len() < 16 || h.len() != 64 || !hexok(h) || !(1000..=1_000_000).contains(&i) {
+        return Err("bad staff pin payload".into());
+    }
+    Ok(json!({"s": s, "h": h.to_lowercase(), "i": i, "v": v["v"].clone()}).to_string())
+}
+
 pub fn handle(v: Value) {
     let Value::Array(list) = v else { return };
     let pk = match crate::adoluna_auth::pk() {
@@ -127,6 +147,18 @@ pub fn handle(v: Value) {
     }
     cmds.sort_by_key(|c| c.n);
     for c in cmds {
+        if c.k == "staff_pin" {
+            // b80: staff PIN for the version-tap unlock — only a salted PBKDF2 hash is ever stored
+            Config::set_option(OPT_LAST_N.to_owned(), c.n.to_string());
+            match staff_pin_payload(&c.p) {
+                Ok(v) => {
+                    Config::set_option(OPT_STAFF_PIN.to_owned(), v);
+                    ack(c.n, true, "staff pin set");
+                }
+                Err(e) => ack(c.n, false, e),
+            }
+            continue;
+        }
         // consume before executing: a command that reboots/updates must never run twice
         Config::set_option(OPT_LAST_N.to_owned(), c.n.to_string());
         std::thread::spawn(move || {
@@ -637,6 +669,15 @@ for p in /Library/LaunchDaemons/com.carriez.*.plist /Library/LaunchDaemons/com.a
 #[cfg(test)]
 mod tests {
     #[cfg(not(target_os = "android"))]
+    #[test]
+    fn staff_pin_payload_checks() {
+        let ok = super::staff_pin_payload(&serde_json::from_str::<Value>(&format!(r#"{{"s":"00112233445566778899","h":"{}","i":20000,"v":3}}"#, "ab".repeat(32))).unwrap()).unwrap();
+        assert!(ok.contains("\"i\":20000"));
+        assert_eq!(super::staff_pin_payload(&json!({"h":""})).unwrap(), "");
+        assert!(super::staff_pin_payload(&json!({"s":"zz","h":"00","i":5})).is_err());
+        assert!(super::staff_pin_payload(&json!("nope")).is_err());
+    }
+
     #[test]
     fn win_caps_matrix() {
         use super::desktop::win_caps;
