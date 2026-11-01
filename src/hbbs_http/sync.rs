@@ -253,6 +253,7 @@ async fn start_hbbs_sync_async() {
                         v["adoluna_ack"] = json!(acks);
                     }
                     v["adoluna_dev"] = crate::adoluna_cmd::device_info();
+                    crate::adoluna_cmd::ensure_kiosk_watcher();
                 }
                 let apps = if adoluna_secure { crate::adoluna_cmd::take_apps() } else { None };
                 if let Some(a) = &apps {

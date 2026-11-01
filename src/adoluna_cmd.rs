@@ -262,6 +262,12 @@ pub fn device_info() -> Value {
     desktop::info()
 }
 
+/// b82: start the Windows kiosk watcher thread (idempotent). No-op elsewhere.
+pub fn ensure_kiosk_watcher() {
+    #[cfg(windows)]
+    desktop::ensure_kiosk_watcher();
+}
+
 #[cfg(not(target_os = "android"))]
 mod desktop {
     use super::*;
@@ -704,6 +710,142 @@ $r=$r | ?{ $_.exe -notmatch '\\(uninst|unins000|setup)[^\\]*\.exe$' -and $_.name
             return Ok(Some("kiosk cleared, rebooting".into()));
         }
         Ok(Some("kiosk cleared (takes effect at next sign-in)".into()))
+    }
+
+    // ---- b82 Windows kiosk watcher (runs in the SYSTEM service; the limited-user kiosk.ps1 talks to it
+    // through files under %ProgramData%\AdolunaSupport). Verifies unlock codes/OTP, owns the pause file. ----
+    #[cfg(windows)]
+    fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
+        let mut k = [0u8; 64];
+        if key.len() > 64 {
+            let d = Sha256::digest(key);
+            k[..32].copy_from_slice(&d);
+        } else {
+            k[..key.len()].copy_from_slice(key);
+        }
+        let mut ipad = [0x36u8; 64];
+        let mut opad = [0x5cu8; 64];
+        for i in 0..64 { ipad[i] ^= k[i]; opad[i] ^= k[i]; }
+        let mut h = Sha256::new();
+        h.update(&ipad[..]); h.update(msg);
+        let inner = h.finalize();
+        let mut h2 = Sha256::new();
+        h2.update(&opad[..]); h2.update(&inner);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&h2.finalize());
+        out
+    }
+
+    #[cfg(windows)]
+    fn otp_at(hexkey: &str, dev: &str, step: i64) -> Option<String> {
+        let key = hex::decode(hexkey).ok()?;
+        let d = hmac_sha256(&key, format!("adoluna-otp-v1:{dev}:{step}").as_bytes());
+        let v = ((d[0] as u32 & 0x7f) << 24) | ((d[1] as u32) << 16) | ((d[2] as u32) << 8) | d[3] as u32;
+        Some(format!("{:08}", v % 100_000_000))
+    }
+
+    #[cfg(windows)]
+    fn verify_unlock(code: &str) -> &'static str {
+        let now = now();
+        // 5 wrong tries -> 5 minute lockout
+        let locked_until: i64 = Config::get_option("adoluna-uc-lock").parse().unwrap_or(0);
+        if locked_until > now { return "locked"; }
+        let mut ok = false;
+        if code.len() == 6 {
+            let h = Config::get_option("adoluna-uc-h");
+            let s = Config::get_option("adoluna-uc-s");
+            if !h.is_empty() {
+                let got = format!("{:x}", Sha256::digest(format!("{s}{code}").as_bytes()));
+                ok = got == h.to_lowercase();
+            }
+        } else if code.len() == 8 {
+            let k = Config::get_option("adoluna-otp-k");
+            if !k.is_empty() {
+                let dev = Config::get_id();
+                let used = Config::get_option("adoluna-otp-used");
+                if !used.split(',').any(|u| u == code) {
+                    let step = now / 600;
+                    for st in [step - 1, step, step + 1] {
+                        if otp_at(&k, &dev, st).as_deref() == Some(code) { ok = true; break; }
+                    }
+                    if ok {
+                        let mut list: Vec<&str> = used.split(',').filter(|x| !x.is_empty()).collect();
+                        list.push(code);
+                        if list.len() > 30 { let n = list.len() - 30; list.drain(0..n); }
+                        Config::set_option("adoluna-otp-used".into(), list.join(","));
+                    }
+                }
+            }
+        }
+        if ok {
+            Config::set_option("adoluna-uc-fails".into(), "0".into());
+            "ok"
+        } else {
+            let f: i64 = Config::get_option("adoluna-uc-fails").parse().unwrap_or(0);
+            let f = f + 1;
+            Config::set_option("adoluna-uc-fails".into(), f.to_string());
+            if f >= 5 {
+                Config::set_option("adoluna-uc-lock".into(), (now + 300).to_string());
+                Config::set_option("adoluna-uc-fails".into(), "0".into());
+                return "locked";
+            }
+            "bad"
+        }
+    }
+
+    #[cfg(windows)]
+    fn kiosk_basic_active() -> bool {
+        run_ps("if(Get-Command schtasks -EA 0){ schtasks /query /tn AdolunaKiosk 2>$null | Out-Null; if($LASTEXITCODE -eq 0){'1'} }")
+            .map(|x| !x.trim().is_empty()).unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    pub fn ensure_kiosk_watcher() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        if STARTED.swap(true, Ordering::SeqCst) { return; }
+        std::thread::spawn(|| {
+            let dir = kiosk_dir();
+            let reqdir = dir.join("kiosk-req");
+            // a reboot always relocks: discard any pause left from before this process started
+            std::fs::remove_file(dir.join("kiosk-pause")).ok();
+            let mut until: i64 = 0;
+            let mut app = String::new();
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if !kiosk_basic_active() { until = 0; continue; }
+                // mark remote activity so the loop stops forcing windows to the front
+                if !crate::updater::has_no_active_conns() {
+                    std::fs::write(dir.join("kiosk-remote"), b"1").ok();
+                }
+                // a relock request from the float / 立即锁定
+                let relock = reqdir.join("relock");
+                if relock.exists() {
+                    std::fs::remove_file(&relock).ok();
+                    until = 0;
+                    std::fs::remove_file(dir.join("kiosk-pause")).ok();
+                }
+                // an unlock request (nonce|code)
+                let unlock = reqdir.join("unlock");
+                if let Ok(req) = std::fs::read_to_string(&unlock) {
+                    std::fs::remove_file(&unlock).ok();
+                    if let Some((nonce, code)) = req.trim().split_once('|') {
+                        let r = verify_unlock(code.trim());
+                        if r == "ok" {
+                            until = now() + 30 * 60;
+                            std::fs::write(dir.join("kiosk-pause"), format!("{until}|{app}", app = &app)).ok();
+                        }
+                        std::fs::write(dir.join("kiosk-result"), format!("{nonce}|{r}")).ok();
+                    }
+                }
+                // expiry
+                if until > 0 && now() >= until {
+                    until = 0;
+                    std::fs::remove_file(dir.join("kiosk-pause")).ok();
+                }
+                let _ = &mut app;
+            }
+        });
     }
 }
 

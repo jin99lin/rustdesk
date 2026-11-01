@@ -172,7 +172,7 @@ object AdolunaDevice {
                 }
                 "kiosk_unlock" -> if (needOwner()) {
                     prefs(c).edit().remove("unlock_until").apply(); pendingRelock = false
-                    AdolunaDO.clearKiosk(c); ack(n, true, "unlocked")
+                    hideFloat(c); AdolunaDO.clearKiosk(c); ack(n, true, "unlocked")
                 }
                 "policy" -> if (needOwner()) { applyPolicy(c, p); prefs(c).edit().putString("policy", p.toString()).apply(); ack(n, true, "policy applied") }
                 "unlock_code" -> {

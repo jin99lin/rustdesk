@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart' as crypto;
 import 'dart:math';
+import 'dart:io' as io;
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
@@ -4467,10 +4468,11 @@ void _adolunaAskPin() async {
 }
 
 // ---- Adoluna b82: shop staff temporary unlock (corner 7 taps + code) — countdown + 「立即锁定」 ----
-// Android: state lives in the Kotlin DO helper (method channel). Windows: the server process sets
-// option adoluna-kiosk-pause-until ("<unix s>|<app>") and watches adoluna-kiosk-relock-req.
-const kAdolunaPauseUntilOpt = 'adoluna-kiosk-pause-until';
-const kAdolunaRelockReqOpt = 'adoluna-kiosk-relock-req';
+// Android: state lives in the Kotlin DO helper (method channel). Windows: the SYSTEM server process writes
+// %ProgramData%\AdolunaSupport\kiosk-pause ("<unix s>|<app>") and watches kiosk-req\relock (user-writable).
+// Files, not config options: the UI's option map is pushed back wholesale on every set_option.
+String _adolunaKioskDir() =>
+    '${io.Platform.environment['ProgramData'] ?? r'C:\ProgramData'}\\AdolunaSupport';
 
 class AdolunaTempUnlockCard extends StatefulWidget {
   const AdolunaTempUnlockCard({Key? key}) : super(key: key);
@@ -4506,7 +4508,8 @@ class _AdolunaTempUnlockCardState extends State<AdolunaTempUnlockCard> {
         until = (r?['until'] as num?)?.toInt() ?? 0;
         app = (r?['app'] as String?) ?? '';
       } else {
-        final v = await bind.mainGetOption(key: kAdolunaPauseUntilOpt);
+        final f = io.File('${_adolunaKioskDir()}\\kiosk-pause');
+        final v = await f.exists() ? (await f.readAsString()).trim() : '';
         final p = v.split('|');
         until = (int.tryParse(p.first) ?? 0) * 1000;
         app = p.length > 1 ? p[1] : '';
@@ -4525,9 +4528,10 @@ class _AdolunaTempUnlockCardState extends State<AdolunaTempUnlockCard> {
     if (isAndroid) {
       await gFFI.invokeMethod('adoluna_relock');
     } else {
-      await bind.mainSetOption(
-          key: kAdolunaRelockReqOpt,
-          value: '${DateTime.now().millisecondsSinceEpoch ~/ 1000}');
+      try {
+        await io.File('${_adolunaKioskDir()}\\kiosk-req\\relock')
+            .writeAsString('${DateTime.now().millisecondsSinceEpoch ~/ 1000}');
+      } catch (_) {}
     }
     if (mounted) setState(() => _untilMs = 0);
   }
