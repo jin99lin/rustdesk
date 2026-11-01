@@ -222,12 +222,12 @@ class Sidecar(unittest.TestCase):
         s, r = self.req("/_admin/adoluna-api/releases", {"platform": "windows", "url": "https://x/a.msi", "sha256": "c" * 64, "auto": True, "build": 81}, "admintok")
         self.assertEqual(r["releases"][0]["platform"], "windows")
         self.assertEqual(r["releases"][0]["build"], 81)
-        self.req("/api/heartbeat", {"id": "300", "adoluna_cmd_n": 0, "adoluna_dev": {"platform": "windows", "ver": "1.5.0", "build": 81}})
+        self.req("/api/heartbeat", {"id": "100", "adoluna_cmd_n": 0, "adoluna_dev": {"platform": "windows", "ver": "1.5.0", "build": 81}})
         u = {"url": "https://x/a.msi", "sha256": "c" * 64}
-        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "300", "k": "update", "p": u}, "admintok")[0], 400)
-        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "300", "k": "update", "p": dict(u, build=81)}, "admintok")[0], 400)
-        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "300", "k": "update", "p": dict(u, url="https://x/a.exe", build=82)}, "admintok")[0], 400)
-        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "300", "k": "update", "p": dict(u, build=82)}, "admintok")[0], 200)
+        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "100", "k": "update", "p": u}, "admintok")[0], 400)
+        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "100", "k": "update", "p": dict(u, build=81)}, "admintok")[0], 400)
+        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "100", "k": "update", "p": dict(u, url="https://x/a.exe", build=82)}, "admintok")[0], 400)
+        r = self.req("/_admin/adoluna-api/dev/cmd", {"id": "100", "k": "update", "p": dict(u, build=82)}, "admintok"); self.assertEqual(r[0], 200, r)
         # b80 staff PIN: admin only, never echoed, delivered as hash
         self.assertEqual(self.req("/_admin/adoluna-api/staff-pin", {"pin": "9999"}, "stafftok")[0], 403)
         self.assertEqual(self.req("/_admin/adoluna-api/staff-pin", {"pin": "99"}, "admintok")[0], 400)
