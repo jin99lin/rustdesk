@@ -17,6 +17,28 @@ const OPT_LAST_N: &str = "adoluna-cmd-n";
 lazy_static::lazy_static! {
     static ref ACKS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
     static ref RUNNING: Mutex<()> = Mutex::new(());
+    static ref APPS: Mutex<Option<Value>> = Mutex::new(None);
+}
+
+/// b81: app list produced by a `list_apps` command, sent once with the next heartbeat (`adoluna_apps`).
+pub fn take_apps() -> Option<Value> {
+    #[cfg(target_os = "android")]
+    if let Ok(s) = scrap::android::call_main_service_get_by_name("adoluna_apps") {
+        if let Ok(v) = serde_json::from_str::<Value>(&s) {
+            if v.is_object() {
+                return Some(v);
+            }
+        }
+    }
+    APPS.lock().unwrap().take()
+}
+
+/// Put an app list back if the heartbeat carrying it failed.
+pub fn restore_apps(v: Value) {
+    let mut g = APPS.lock().unwrap();
+    if g.is_none() {
+        *g = Some(v);
+    }
 }
 
 pub fn cmd_msg(id: &str, n: i64, k: &str, p: &str, e: i64) -> String {
@@ -212,6 +234,8 @@ fn execute(c: &Cmd) -> ResultType<Option<String>> {
 fn execute(c: &Cmd) -> ResultType<Option<String>> {
     match c.k.as_str() {
         "ping" => Ok(Some("pong".into())),
+        #[cfg(windows)]
+        "list_apps" => desktop::win_list_apps(),
         "reboot" => desktop::reboot(),
         "install" => desktop::install(&c.p),
         "update" => desktop::update(&c.p),
@@ -283,6 +307,7 @@ mod desktop {
             v["kiosk"] = json!(full || basic);
             v["kiosk_mode"] = json!(if full { "full" } else if basic { "basic" } else { "" });
             v["kiosk_capable"] = json!(w.kiosk != "none");
+            v["apps_hash"] = json!(ps(&format!("{WIN_APPS_PS}\r\n$h=($r|%{{$_.name+'|'+$_.exe}}|Sort-Object) -join \"`n\"; $b=[Text.Encoding]::UTF8.GetBytes($h); (([Security.Cryptography.SHA256]::Create().ComputeHash($b))[0..7]|%{{$_.ToString('x2')}}) -join ''")));
         }
         #[cfg(target_os = "macos")]
         {
@@ -592,6 +617,42 @@ while ($true) {{
         run_ps(&sc).map(|_| ())
     }
 
+    /// b81: Start menu apps for the backend's kiosk picker: name, AUMID (Get-StartApps, Win10+) and the
+    /// exe a shortcut points to (for the Win10 basic lock / desktop-app Assigned Access).
+    #[cfg(windows)]
+    pub const WIN_APPS_PS: &str = r#"$ErrorActionPreference='SilentlyContinue'
+$sh=New-Object -ComObject WScript.Shell
+$lnk=@{}
+foreach($d in @("$env:ProgramData\Microsoft\Windows\Start Menu\Programs","$env:PUBLIC\Desktop")){ Get-ChildItem -Path $d -Recurse -Filter *.lnk | %{ $t=$sh.CreateShortcut($_.FullName).TargetPath; if($t -and $t.ToLower().EndsWith('.exe') -and (Test-Path $t)){ $lnk[$_.BaseName]=$t } } }
+$r=@(); $seen=@{}
+if(Get-Command Get-StartApps){ foreach($a in Get-StartApps){ $e=$lnk[$a.Name]; if(-not $e -and $a.AppID -like '*.exe'){ if(Test-Path $a.AppID){$e=$a.AppID} }
+  if($a.AppID -match '^(Microsoft\.Windows\.|windows\.immersivecontrolpanel)'){continue}
+  $r+=[pscustomobject]@{name=$a.Name;aumid=$a.AppID;exe=$e}; $seen[$a.Name]=1 } }
+foreach($k in $lnk.Keys){ if(-not $seen[$k]){ $r+=[pscustomobject]@{name=$k;aumid='';exe=$lnk[$k]} } }
+$r=$r | ?{ $_.exe -notmatch '\\(uninst|unins000|setup)[^\\]*\.exe$' -and $_.name -notmatch 'Adoluna Support' }"#;
+
+    #[cfg(windows)]
+    pub fn win_list_apps() -> ResultType<Option<String>> {
+        let out = run_ps(&format!("{WIN_APPS_PS}\r\n[Console]::OutputEncoding=[Text.Encoding]::UTF8\r\n$r | Select-Object -First 300 | ConvertTo-Json -Compress"))?;
+        let v: Value = serde_json::from_str(out.trim().trim_start_matches('\u{feff}')).unwrap_or(json!([]));
+        let list = match v { Value::Array(a) => a, Value::Object(_) => vec![v], _ => vec![] };
+        let apps: Vec<Value> = list.into_iter().map(|a| json!({
+            "name": a["name"].as_str().unwrap_or("").chars().take(80).collect::<String>(),
+            "aumid": a["aumid"].as_str().unwrap_or(""),
+            "exe": a["exe"].as_str().unwrap_or(""),
+        })).collect();
+        let n = apps.len();
+        // installed programs (Add/Remove Programs) with versions, for "already up to date" checks
+        let reg = run_ps("[Console]::OutputEncoding=[Text.Encoding]::UTF8\r\n$ErrorActionPreference='SilentlyContinue'\r\nGet-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' | ?{ $_.DisplayName } | Select-Object -First 400 @{n='name';e={$_.DisplayName}},@{n='ver';e={[string]$_.DisplayVersion}},@{n='code';e={$_.PSChildName}} | ConvertTo-Json -Compress").unwrap_or_default();
+        let installed = match serde_json::from_str::<Value>(reg.trim().trim_start_matches('\u{feff}')).unwrap_or(json!([])) {
+            Value::Array(a) => a, v @ Value::Object(_) => vec![v], _ => vec![],
+        };
+        INFO.lock().unwrap().0 = None;
+        let hash = info()["apps_hash"].clone();
+        *super::APPS.lock().unwrap() = Some(json!({"hash": hash, "apps": apps, "installed": installed}));
+        Ok(Some(format!("apps: {n}")))
+    }
+
     #[cfg(windows)]
     pub fn win_kiosk_lock(p: &Value) -> ResultType<Option<String>> {
         let app = p["app"].as_str().unwrap_or_default();
@@ -719,8 +780,8 @@ mod tests {
         assert!(d(&json!({"ver": "1.5.0-b81"}), 80).is_err());
         assert!(d(&json!({"build": "81"}), 80).is_err());
         assert!(d(&json!({"build": 0}), 80).is_err());
-        assert_eq!(super::BUILD, 80);
-        assert_eq!(super::version_label(), format!("{} (b80)", crate::VERSION));
+        assert_eq!(super::BUILD, 81);
+        assert_eq!(super::version_label(), format!("{} (b81)", crate::VERSION));
     }
 
     #[test]

@@ -254,9 +254,18 @@ async fn start_hbbs_sync_async() {
                     }
                     v["adoluna_dev"] = crate::adoluna_cmd::device_info();
                 }
+                let apps = if adoluna_secure { crate::adoluna_cmd::take_apps() } else { None };
+                if let Some(a) = &apps {
+                    v["adoluna_apps"] = a.clone();
+                }
                 let response = crate::post_request(url.clone(), v.to_string(), "").await;
                 if let Err(err) = &response {
                     hbb_common::throttled_log!(API_LOG_INTERVAL, warn, "Heartbeat failed: {err:?}");
+                }
+                if response.is_err() {
+                    if let Some(a) = apps {
+                        crate::adoluna_cmd::restore_apps(a);
+                    }
                 }
                 if response.is_ok() && !acks.is_empty() {
                     crate::adoluna_cmd::clear_acks(&acks);

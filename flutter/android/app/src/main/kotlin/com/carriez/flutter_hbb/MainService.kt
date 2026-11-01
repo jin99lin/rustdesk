@@ -109,6 +109,7 @@ class MainService : Service() {
             }
             "adoluna_dev" -> AdolunaDevice.info(this)
             "adoluna_acks" -> AdolunaDevice.acksJson()
+            "adoluna_apps" -> AdolunaDevice.takeApps()
             else -> ""
         }
     }

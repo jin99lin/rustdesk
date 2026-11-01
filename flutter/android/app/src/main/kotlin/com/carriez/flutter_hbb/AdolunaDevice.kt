@@ -97,7 +97,45 @@ object AdolunaDevice {
         o.put("kiosk_pending", pendingRelock)
         o.put("policy", JSONObject(prefs(c).getString("policy", "{}") ?: "{}"))
         o.put("unlock_code_set", prefs(c).contains("uc_h")).put("otp_set", prefs(c).contains("otp_k"))
+        try { o.put("apps_hash", appsHash(c)) } catch (_: Exception) {}
         return o.toString()
+    }
+
+    // ---------------- b81: launcher app list (for the backend's kiosk app picker) ----------------
+    @Volatile private var pendingApps: String? = null
+    @Synchronized fun takeApps(): String { val s = pendingApps ?: ""; pendingApps = null; return s }
+    private fun launcherApps(c: Context): List<android.content.pm.ResolveInfo> {
+        val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val skip = setOf(c.packageName, "com.android.settings")
+        return c.packageManager.queryIntentActivities(i, 0).filter { it.activityInfo.packageName !in skip }
+            .distinctBy { it.activityInfo.packageName }
+    }
+    private fun verOf(c: Context, pkg: String): String = try { c.packageManager.getPackageInfo(pkg, 0).versionName ?: "" } catch (e: Exception) { "" }
+    private fun vcOf(c: Context, pkg: String): Long = try {
+        val pi = c.packageManager.getPackageInfo(pkg, 0)
+        if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else @Suppress("DEPRECATION") pi.versionCode.toLong()
+    } catch (e: Exception) { -1L }
+    fun appsHash(c: Context): String {
+        val s = launcherApps(c).map { it.activityInfo.packageName + "@" + verOf(c, it.activityInfo.packageName) }.sorted().joinToString("\n")
+        return MessageDigest.getInstance("SHA-256").digest(s.toByteArray()).take(8).joinToString("") { "%02x".format(it) }
+    }
+    private fun iconB64(c: Context, ri: android.content.pm.ResolveInfo): String = try {
+        val d = ri.loadIcon(c.packageManager)
+        val bmp = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+        val cv = android.graphics.Canvas(bmp); d.setBounds(0, 0, 48, 48); d.draw(cv)
+        val bo = java.io.ByteArrayOutputStream(); bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bo)
+        if (bo.size() > 6000) "" else android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP)
+    } catch (e: Exception) { "" }
+    fun listApps(c: Context): Int {
+        val arr = JSONArray(); var total = 0
+        for (ri in launcherApps(c).sortedBy { it.loadLabel(c.packageManager).toString().lowercase() }.take(300)) {
+            val pkg = ri.activityInfo.packageName
+            val o = JSONObject().put("name", ri.loadLabel(c.packageManager).toString().take(80)).put("pkg", pkg).put("ver", verOf(c, pkg).take(40)).put("vc", vcOf(c, pkg))
+            if (total < 400_000) { val ic = iconB64(c, ri); if (ic.isNotEmpty()) { o.put("icon", ic); total += ic.length } }
+            arr.put(o)
+        }
+        pendingApps = JSONObject().put("hash", appsHash(c)).put("apps", arr).toString()
+        return arr.length()
     }
 
     private fun serial(c: Context): String = try {
@@ -114,6 +152,7 @@ object AdolunaDevice {
         try {
             when (k) {
                 "ping", "info" -> ack(n, true, "ok")
+                "list_apps" -> ack(n, true, "apps: ${listApps(c)}")
                 "install" -> install(c, n, p)
                 "update" -> {
                     // compare build numbers (versionCode) only, never the version string
@@ -157,6 +196,15 @@ object AdolunaDevice {
                 f.inputStream().use { i -> val buf = ByteArray(65536); while (true) { val r = i.read(buf); if (r <= 0) break; md.update(buf, 0, r) } }
                 val got = md.digest().joinToString("") { "%02x".format(it) }
                 if (got != want) { f.delete(); ack(n, false, "sha256 mismatch"); return@Thread }
+                // b81: skip when the same or a newer version of this app is already installed (unless forced)
+                if (!p.optBoolean("force", false)) try {
+                    val ai = c.packageManager.getPackageArchiveInfo(f.path, 0)
+                    if (ai != null) {
+                        val nv = if (Build.VERSION.SDK_INT >= 28) ai.longVersionCode else @Suppress("DEPRECATION") ai.versionCode.toLong()
+                        val have = vcOf(c, ai.packageName)
+                        if (have >= 0 && have >= nv) { f.delete(); ack(n, true, "up to date: ${ai.packageName} vc$have >= $nv"); return@Thread }
+                    }
+                } catch (_: Exception) {}
                 val owner = AdolunaDO.isOwner(c)
                 // our own "block installs" restriction must not stop the backend's install
                 if (owner) try { AdolunaDO.dpm(c).clearUserRestriction(AdolunaDO.admin(c), UserManager.DISALLOW_INSTALL_APPS) } catch (_: Exception) {}
