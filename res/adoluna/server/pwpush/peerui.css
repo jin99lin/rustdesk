@@ -88,3 +88,9 @@
 #adp .adp-at td,#adp .adp-at th{padding:4px 6px;font-size:12px}
 .adp-dlg .adp-ck{display:flex!important;gap:8px;align-items:center;justify-content:flex-start;text-align:left;width:100%}
 .adp-dlg .adp-ck input[type=checkbox]{width:16px!important;height:16px!important;margin:0;flex:none}
+/* b81: library / app picker rows */
+.adp-li{padding:8px 10px;border-bottom:1px solid #F1F5F9;cursor:pointer}
+.adp-li:hover{background:#F8FAFC}
+.adp-li.on{background:#EEF2FF;box-shadow:inset 3px 0 0 #4F46E5}
+.adm-bvt th,.adm-bvt td{text-align:left;padding:6px 8px;border-bottom:1px solid #F1F5F9;white-space:nowrap}
+.adm-bvt td:last-child{white-space:normal}

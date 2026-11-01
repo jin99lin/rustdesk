@@ -4,7 +4,7 @@ Listens where rustdesk-api used to (10.20.26.62:21114), proxies everything to
 rustdesk-api (127.0.0.1:21124) and adds a signed {v,h,s,sig} to /api/heartbeat
 responses for devices whose applied version is older.  Only sha256(pw+salt) is stored.
 Admin page: /_admin/adoluna-password (LAN/VPN only, needs admin login token)."""
-import base64, http.client, ipaddress, json, os, secrets, sqlite3, string, sys, threading, time
+import base64, shutil, http.client, ipaddress, json, os, secrets, sqlite3, string, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from hashlib import sha256
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import accounts as ACC
 import merchants as M
 import devcmd as D
+import swlib as SW
 
 LISTEN = (os.environ.get("PW_LISTEN", "10.20.26.62"), int(os.environ.get("PW_PORT", "21114")))
 UP = (os.environ.get("PW_UP_HOST", "127.0.0.1"), int(os.environ.get("PW_UP_PORT", "21124")))
@@ -19,6 +20,7 @@ DIR = os.environ.get("PW_DIR", "/opt/rustdesk/pwpush")
 DB = os.environ.get("PW_DB", "/opt/rustdesk/api-data/rustdeskapi.db")
 STATE = os.path.join(DIR, "state.json")
 HERE = os.path.dirname(os.path.abspath(__file__))
+PUBLIC_URL = os.environ.get("PW_PUBLIC_URL", "https://remotesupport.adoluna.com")
 KEY = Ed25519PrivateKey.from_private_bytes(open(os.path.join(DIR, "signing.key"), "rb").read())
 LOCK = threading.Lock()
 ACL_DB = os.path.join(DIR, "adoluna.db")
@@ -186,6 +188,7 @@ def acl():
       create table if not exists audit(id integer primary key, ts integer, user text, my_id text, peer_id text,
         ip text, result text);""")
     D.init(c)
+    SW.init(c)
     if D._KEY is None:
         D.set_key_dir(DIR)
     return c
@@ -439,6 +442,12 @@ class H(BaseHTTPRequestHandler):
     def proxy(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n) if n else None
+        self._hb = body
+        if body and b"adoluna_apps" in body and self.path.split("?")[0] == "/api/heartbeat":
+            try:  # b81: the app list is ours - don't forward it to rustdesk-api
+                q = json.loads(body); q.pop("adoluna_apps", None); body = json.dumps(q).encode()
+            except Exception:
+                pass
         hdr = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
         hdr["Host"] = self.headers.get("Host", "%s:%d" % LISTEN)
         if "X-Forwarded-For" not in self.headers and "X-Real-IP" not in self.headers:
@@ -488,14 +497,14 @@ class H(BaseHTTPRequestHandler):
         if self.command == "POST" and self.path.split("?")[0] == "/api/heartbeat" and r.status == 200:
             data = self.add_pw(body, data)
             data = self.add_cfg(body, data)
-            data = self.add_cmd(body, data)
+            data = self.add_cmd(self._hb, data)
         extra = [(k, v) for k, v in r.getheaders() if k.lower() not in HOP and k.lower() != "content-type"]
         if idx and r.status == 200 and b"</head>" in data and PEERUI:
             data = data.replace(b"<head>", b"<head><script>try{if(!localStorage.getItem('adoluna_lang_init')){localStorage.setItem('lang','zh-CN');"
                                 b"localStorage.setItem('adoluna_lang_init','1')}}catch(e){}</script>", 1)
-            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=10">'
-                                b'<script src="/_admin/adoluna-peerui.js?v=10" defer></script>'
-                                b'<link rel="stylesheet" href="/_admin/adoluna-merchui.css?v=7"><script src="/_admin/adoluna-merchui.js?v=7" defer></script></head>', 1)
+            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=11">'
+                                b'<script src="/_admin/adoluna-peerui.js?v=11" defer></script>'
+                                b'<link rel="stylesheet" href="/_admin/adoluna-merchui.css?v=8"><script src="/_admin/adoluna-merchui.js?v=8" defer></script></head>', 1)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
         if ent and r.status == 200 and PEERUI:  # admin build hides these menus; admins need Users (email, reset password)
             for a, b in UNHIDE:
@@ -606,12 +615,23 @@ class H(BaseHTTPRequestHandler):
                 sys.stderr.write("staff-pin v%s by %s\n" % (v, by))
             with acl() as c:
                 return self.send(200, json.dumps(D.staff_pin_status(c)).encode(), extra=[("Cache-Control", "no-store")])
+        if path == "/_admin/adoluna-api/batch":
+            return self.batch_admin(body, qs, by, zh)
         dev = str(qs.get("id", "") if self.command == "GET" else body.get("id", "")).strip()
         if not dev.isdigit() or not known_peer(dev):
             return self.send(400, json.dumps({"error": "设备 ID 无效" if zh else "Invalid device ID"}).encode())
         if path == "/_admin/adoluna-api/dev" and self.command == "GET":
             with acl() as c:
                 return self.send(200, json.dumps(D.detail(c, dev)).encode(), extra=[("Cache-Control", "no-store")])
+        if path == "/_admin/adoluna-api/dev/apps":
+            with acl() as c:
+                if self.command == "POST":
+                    n = D.queue(c, dev, "list_apps", {}, by)
+                    return self.send(200, json.dumps({"n": n}).encode())
+                a = D.apps_of(c, dev)
+                pending = bool(c.execute("select 1 from dev_cmds where peer_id=? and k='list_apps' and acked_at is null and e>?",
+                                         (dev, int(time.time()))).fetchone())
+            return self.send(200, json.dumps({"apps": a, "pending": pending}).encode(), extra=[("Cache-Control", "no-store")])
         if path == "/_admin/adoluna-api/dev/otp" and self.command == "GET":
             with acl() as c:
                 o = D.current_otp(c, dev)
@@ -631,8 +651,19 @@ class H(BaseHTTPRequestHandler):
                     n = D.new_otp_secret(c, dev, by)
                     sys.stderr.write("dev-cmd %s otp_secret n=%s by %s\n" % (dev, n, by))
                     return self.send(200, json.dumps({"n": n}).encode())
-                plat = D.platform_of(D.dev_info_of(c, dev)) if k == "update" else None
-                err = D.validate(k, p, plat) or D.capability_error(c, dev, k)
+                plat = D.platform_of(D.dev_info_of(c, dev))
+                if isinstance(p, dict) and p.get("lib"):  # b81: install/update from the software library
+                    row = SW.get(c, str(p.pop("lib")).lower())
+                    if not row:
+                        return self.send(400, json.dumps({"error": "软件库里找不到该安装包" if zh else "Package not in library"}).encode())
+                    if row["platform"] != plat:
+                        return self.send(400, json.dumps({"error": "安装包平台和设备不一致" if zh else "Package platform doesn't match the device"}).encode())
+                    p.update({"url": SW.url_for(PUBLIC_URL, row), "sha256": row["sha256"], "name": row["filename"]})
+                    if k == "update" or row.get("build") and row.get("pkg") == "com.adoluna.support":
+                        p.setdefault("build", row.get("build"))
+                err = D.validate(k, p, plat if k == "update" else None) or D.capability_error(c, dev, k)
+                if not err and k == "kiosk_lock":
+                    err = D.kiosk_check(c, dev, p, plat)
                 if not err and k == "update":
                     db = D.device_build(D.dev_info_of(c, dev))
                     if db is not None and p["build"] <= db:
@@ -640,9 +671,115 @@ class H(BaseHTTPRequestHandler):
                 if err:
                     return self.send(400, json.dumps({"error": err}).encode())
                 n = D.queue(c, dev, k, p, by)
+                if k == "kiosk_lock":
+                    D.remember_lock(c, dev, p)
             sys.stderr.write("dev-cmd %s %s n=%s by %s\n" % (dev, k, n, by))
             return self.send(200, json.dumps({"n": n}).encode())
         return self.send(404, b"{}")
+
+    def batch_admin(self, body, qs, by, zh):
+        """b81: batch push from the software library to many devices of ONE platform; per-device results."""
+        if self.command == "GET":
+            with acl() as c:
+                if qs.get("id"):
+                    b = D.batch_status(c, int(qs["id"]) if str(qs["id"]).isdigit() else 0)
+                    return self.send(200 if b else 404, json.dumps(b or {}).encode(), extra=[("Cache-Control", "no-store")])
+                rows = [dict(zip(("id", "k", "label", "created_at", "by"), r)) for r in
+                        c.execute("select id,k,label,created_at,created_by from batches order by id desc limit 20")]
+            return self.send(200, json.dumps({"batches": rows}).encode())
+        ids = [str(x) for x in (body.get("ids") or []) if str(x).isdigit()][:500]
+        sha = str(body.get("lib", "")).lower(); force = bool(body.get("force"))
+        with acl() as c:
+            row = SW.get(c, sha)
+            if not row or not ids:
+                return self.send(400, json.dumps({"error": "请选择设备和安装包" if zh else "Pick devices and a package"}).encode())
+            plats = {D.platform_of(D.dev_info_of(c, d)) for d in ids}
+            if len(plats) > 1:
+                return self.send(400, json.dumps({"error": "批量推送只能选同一平台" if zh else "Batch push needs devices of one platform"}).encode())
+            plan = D.batch_plan(c, ids, row, force)
+            is_client = row.get("pkg") == "com.adoluna.support" or (row["platform"] == "windows" and "adoluna" in row["name"].lower() and row.get("build"))
+            k = "update" if is_client and (row["platform"] == "android" or row["ext"] == "msi") else "install"
+            if body.get("plan_only"):
+                return self.send(200, json.dumps({"plan": plan, "k": k, "pkg": row}).encode())
+            items = [{"id": d, "state": "uptodate", "msg": "已是最新，跳过"} for d in plan["uptodate"]]
+            items += [{"id": d, "state": "skip", "msg": "平台不一致，跳过"} for d in plan["platform"]]
+            for d in plan["send"]:
+                p = {"url": SW.url_for(PUBLIC_URL, row), "sha256": row["sha256"], "name": row["filename"]}
+                if row.get("build") and (k == "update" or row.get("pkg") == "com.adoluna.support"):
+                    p["build"] = int(row["build"])
+                if force:
+                    p["force"] = True
+                kk = k
+                err = D.validate(kk, p, row["platform"]) or D.capability_error(c, d, kk)
+                if err:
+                    items.append({"id": d, "state": "fail", "msg": err}); continue
+                n = D.queue(c, d, kk, p, by)
+                items.append({"id": d, "n": n, "state": "queued", "unknown": d in plan["unknown"]})
+            label = "%s %s" % (row["name"], row.get("ver") or "")
+            cur = c.execute("insert into batches(k,label,created_at,created_by,items) values(?,?,?,?,?)",
+                            (k, label, int(time.time()), by, json.dumps(items)))
+            bid = cur.lastrowid
+        audit(by, "", ",".join(ids[:50]), by, "批量推送 #%s %s：推送 %d 台，跳过最新 %d 台" % (bid, label.strip(), len(plan["send"]), len(plan["uptodate"])))
+        sys.stderr.write("batch %s %s send=%d skip=%d by %s\n" % (bid, sha[:12], len(plan["send"]), len(plan["uptodate"]), by))
+        return self.send(200, json.dumps({"id": bid}).encode())
+
+    def sw_admin(self, path):
+        zh = not str(self.headers.get("Accept-Language", "zh")).lower().startswith("en")
+        if not self.is_admin():
+            n = int(self.headers.get("Content-Length") or 0)
+            if 0 < n <= 65536:
+                self.rfile.read(n)
+            return self.send(403, json.dumps({"error": "需要在内网用管理员账号登录后台" if zh else "Sign in as an administrator on the internal network"}).encode(),
+                             extra=[("Connection", "close")])
+        by = self.client_ip()
+        if path == "/_admin/adoluna-api/swlib/upload" and self.command == "POST":
+            from urllib.parse import unquote
+            n = int(self.headers.get("Content-Length") or 0)
+            fn = unquote(self.headers.get("X-Filename", ""))
+            try:
+                with acl() as c:
+                    row = SW.store(c, DIR, self.rfile, n, fn, by, unquote(self.headers.get("X-Name", "")),
+                                   unquote(self.headers.get("X-Ver", "")), self.headers.get("X-Build"))
+            except ValueError as e:
+                return self.send(400, json.dumps({"error": str(e)}).encode(), extra=[("Connection", "close")])
+            audit(by, "", "", by, "软件库上传 %s %s (%s)" % (row["name"], row["ver"], row["sha256"][:12]))
+            sys.stderr.write("swlib upload %s %s by %s\n" % (row["sha256"][:12], row["size"], by))
+            return self.send(200, json.dumps(row).encode())
+        body = (self.body_json() or {}) if self.command == "POST" else {}
+        if path == "/_admin/adoluna-api/swlib/delete" and self.command == "POST":
+            sha = str(body.get("sha256", "")).lower()
+            with acl() as c:
+                row = SW.get(c, sha)
+                ok = SW.delete(c, DIR, sha)
+            if ok:
+                audit(by, "", "", by, "软件库删除 %s %s" % (row["name"], row["ver"]))
+            return self.send(200 if ok else 404, json.dumps({"ok": ok}).encode())
+        plat = self.path.split("platform=", 1)[1].split("&")[0] if "platform=" in self.path else None
+        with acl() as c:
+            L = SW.listing(c, plat or None)
+        for r in L:
+            r["url"] = SW.url_for(PUBLIC_URL, r)
+        return self.send(200, json.dumps({"list": L, "max_mb": SW.MAX_FILE // 1048576}).encode(), extra=[("Cache-Control", "no-store")])
+
+    def pkg_download(self):
+        parts = self.path.split("?")[0].split("/")
+        sha = parts[3].lower() if len(parts) > 3 else ""
+        if not SW.SHA.match(sha):
+            return self.send(404, b"not found", "text/plain")
+        with acl() as c:
+            row = SW.get(c, sha)
+        if not row or not os.path.exists(SW.path_of(DIR, row)):
+            return self.send(404, b"not found", "text/plain")
+        f = SW.path_of(DIR, row); size = os.path.getsize(f)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.android.package-archive" if row["ext"] == "apk" else "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", 'attachment; filename="%s"' % row["filename"])
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.end_headers()
+        if self.command == "GET":
+            with open(f, "rb") as fp:
+                shutil.copyfileobj(fp, self.wfile, 1 << 20)
 
     def client_ip(self):
         return (self.headers.get("X-Real-IP") or self.headers.get("X-Forwarded-For", "").split(",")[0]
@@ -871,7 +1008,10 @@ class H(BaseHTTPRequestHandler):
             return self.acl_admin(path)
         if path == "/_admin/adoluna-api/audit":
             return self.audit_list()
+        if path in ("/_admin/adoluna-api/swlib", "/_admin/adoluna-api/swlib/upload", "/_admin/adoluna-api/swlib/delete"):
+            return self.sw_admin(path)
         if path in ("/_admin/adoluna-api/dev", "/_admin/adoluna-api/dev/cmd", "/_admin/adoluna-api/dev/otp",
+                    "/_admin/adoluna-api/dev/apps", "/_admin/adoluna-api/batch",
                     "/_admin/adoluna-api/dev-list", "/_admin/adoluna-api/releases", "/_admin/adoluna-api/staff-pin"):
             return self.dev_admin(path)
         if path != "/_admin/adoluna-api/password":
@@ -980,6 +1120,8 @@ class H(BaseHTTPRequestHandler):
     def handle_any(self):
         if self.path.split("?")[0] == "/_adoluna/health":
             return self.health()
+        if self.path.startswith("/_adoluna/pkg/") and self.command in ("GET", "HEAD"):
+            return self.pkg_download()
         if self.path.split("?")[0] == "/api/adoluna/ticket":
             return self.ticket()
         if self.path.startswith("/_admin/adoluna"):

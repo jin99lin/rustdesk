@@ -8,7 +8,7 @@ unlock codes are shown once to the admin and only sha256(salt+code) goes to the 
 import base64, hashlib, hmac, json, re, secrets, time
 
 KINDS = {"ping", "info", "reboot", "install", "update", "kiosk_lock", "kiosk_unlock", "policy",
-         "unlock_code", "otp_secret", "staff_pin"}
+         "unlock_code", "otp_secret", "staff_pin", "list_apps"}
 TTL = {"reboot": 3600}
 DEFAULT_TTL = 7 * 86400
 SHA = re.compile(r"^[0-9a-f]{64}$")
@@ -26,6 +26,10 @@ SCHEMA = """
   create table if not exists staff_pin(id integer primary key check(id=1), v integer not null, payload text not null,
     ts integer, by text);
   create table if not exists dev_pin(peer_id text primary key, v integer not null);
+  create table if not exists dev_apps(peer_id text primary key, hash text, apps text, ts integer);
+  create table if not exists dev_lastlock(peer_id text primary key, app text, ts integer);
+  create table if not exists batches(id integer primary key autoincrement, k text, label text, created_at integer,
+    created_by text, items text);
 """
 
 # --- at-rest encryption for secret material (OTP seeds, unlock-code hashes) ---
@@ -203,6 +207,11 @@ def on_heartbeat(c, key, q, now=None):
     if not dev:
         return []
     info = q.get("adoluna_dev")
+    apps = q.get("adoluna_apps")
+    if isinstance(apps, dict) and isinstance(apps.get("apps"), list):
+        store_apps(c, dev, apps, now)
+    if isinstance(info, dict) and info.get("apps_hash"):
+        maybe_list_apps(c, dev, str(info["apps_hash"]), now)
     if isinstance(info, dict):
         c.execute("insert or replace into dev_info(peer_id,info,ts) values(?,?,?)", (dev, json.dumps(info)[:8000], now))
     for a in q.get("adoluna_ack") or []:
@@ -295,7 +304,7 @@ def summary(c):
             i = json.loads(info)
         except Exception:
             i = {}
-        out[pid] = {"do": bool(i.get("is_owner")), "kiosk": bool(i.get("kiosk")), "platform": platform_of(i),
+        out[pid] = {"build": device_build(i), "ver": str(i.get("ver") or ""), "do": bool(i.get("is_owner")), "kiosk": bool(i.get("kiosk")), "platform": platform_of(i),
                     "kiosk_capable": bool(i.get("kiosk_capable")), "os_label": os_label(i),
                     "cap": i.get("cap") if isinstance(i.get("cap"), dict) else None, "ts": ts}
     return out
@@ -321,3 +330,124 @@ def set_release(c, platform, url, sha, label, auto, by, build):
 def releases(c):
     return [dict(zip(("platform", "url", "sha256", "label", "auto", "ts", "by", "build"), r))
             for r in c.execute("select platform,url,sha256,label,auto,ts,by,build from releases")]
+
+
+# --- b81: installed app list (kiosk app picker, "already up to date" checks) ---
+APPS_MAX = 600_000
+
+def store_apps(c, dev, a, now):
+    keep = []
+    for x in a.get("apps")[:300]:
+        if not isinstance(x, dict):
+            continue
+        y = {k: str(x.get(k) or "")[:260] for k in ("name", "pkg", "ver", "aumid", "exe")}
+        if isinstance(x.get("vc"), int):
+            y["vc"] = x["vc"]
+        ic = x.get("icon")
+        if isinstance(ic, str) and len(ic) <= 8000 and re.match(r"^[A-Za-z0-9+/=]+$", ic):
+            y["icon"] = ic
+        keep.append({k: v for k, v in y.items() if v != ""})
+    inst = [{k: str(x.get(k) or "")[:200] for k in ("name", "ver", "code")} for x in (a.get("installed") or [])[:400] if isinstance(x, dict)]
+    blob = json.dumps({"apps": keep, "installed": inst}, separators=(",", ":"))
+    if len(blob) > APPS_MAX:  # drop icons first
+        for y in keep:
+            y.pop("icon", None)
+        blob = json.dumps({"apps": keep, "installed": inst}, separators=(",", ":"))
+    c.execute("insert or replace into dev_apps(peer_id,hash,apps,ts) values(?,?,?,?)", (dev, str(a.get("hash") or "")[:64], blob, now))
+
+def maybe_list_apps(c, dev, h, now):
+    r = c.execute("select hash from dev_apps where peer_id=?", (dev,)).fetchone()
+    if r and r[0] == h:
+        return
+    # one outstanding request at a time (10 min)
+    if c.execute("select 1 from dev_cmds where peer_id=? and k='list_apps' and created_at>? and (acked_at is null or acked_at>?)",
+                 (dev, now - 600, now - 120)).fetchone():
+        return
+    queue(c, dev, "list_apps", {}, "auto", now)
+
+def apps_of(c, dev):
+    r = c.execute("select apps, ts, hash from dev_apps where peer_id=?", (dev,)).fetchone()
+    if not r:
+        return None
+    try:
+        d = json.loads(r[0])
+    except Exception:
+        d = {"apps": []}
+    d["ts"] = r[1]
+    last = c.execute("select app from dev_lastlock where peer_id=?", (dev,)).fetchone()
+    d["last"] = last[0] if last else ""
+    return d
+
+def kiosk_check(c, dev, p, plat):
+    """None if ok. Old clients (no list) fall through to manual entry."""
+    a = apps_of(c, dev)
+    if not a or not a.get("apps"):
+        return None
+    if plat == "android":
+        if not any(x.get("pkg") == p.get("pkg") for x in a["apps"]):
+            return "该 App 不在设备的应用列表里，请点「刷新列表」后重选"
+    return None
+
+def remember_lock(c, dev, p, now=None):
+    c.execute("insert or replace into dev_lastlock(peer_id,app,ts) values(?,?,?)", (dev, str(p.get("pkg") or p.get("app") or ""), int(now or time.time())))
+
+def _vt(v):
+    return tuple(int(x) for x in re.findall(r"\d+", str(v or ""))[:4])
+
+def up_to_date(c, dev, pkg, info=None):
+    """pkg = swlib row. True / False / None (can't tell: old client without app list)."""
+    info = info if info is not None else dev_info_of(c, dev)
+    if pkg.get("pkg") == "com.adoluna.support" or (pkg.get("platform") == "windows" and "adoluna" in str(pkg.get("name", "")).lower() and pkg.get("build")):
+        db = device_build(info)
+        return None if db is None or not pkg.get("build") else db >= int(pkg["build"])
+    a = apps_of(c, dev)
+    if not a:
+        return None
+    if pkg["platform"] == "android":
+        if not pkg.get("pkg"):
+            return None
+        for x in a.get("apps", []):
+            if x.get("pkg") == pkg["pkg"]:
+                return isinstance(x.get("vc"), int) and pkg.get("build") is not None and x["vc"] >= int(pkg["build"])
+        return False
+    nm = str(pkg.get("name") or "").lower()
+    if not nm or not pkg.get("ver"):
+        return None
+    for x in a.get("installed", []):
+        xn = str(x.get("name", "")).lower()
+        if xn and (xn == nm or (len(nm) >= 4 and (nm in xn or xn in nm))):
+            return bool(_vt(x.get("ver"))) and _vt(x.get("ver")) >= _vt(pkg["ver"])
+    return False
+
+def batch_plan(c, ids, pkg, force=False):
+    """Split devices into send / skip_uptodate / skip_platform / unknown(=send with note)."""
+    out = {"send": [], "uptodate": [], "platform": [], "unknown": []}
+    for dev in ids:
+        info = dev_info_of(c, dev)
+        if platform_of(info) != pkg["platform"]:
+            out["platform"].append(dev); continue
+        u = None if force else up_to_date(c, dev, pkg, info)
+        if u is True:
+            out["uptodate"].append(dev)
+        else:
+            out["send"].append(dev)
+            if u is None and not force:
+                out["unknown"].append(dev)
+    return out
+
+def batch_status(c, bid):
+    r = c.execute("select id,k,label,created_at,created_by,items from batches where id=?", (bid,)).fetchone()
+    if not r:
+        return None
+    items = json.loads(r[5])
+    for it in items:
+        if it.get("n"):
+            x = c.execute("select delivered_at, acked_at, ok, msg from dev_cmds where id=?", (it["n"],)).fetchone()
+            if x:
+                st = "queued" if not x[0] else "sent"
+                if x[1]:
+                    st = "ok" if x[2] else "fail"
+                    if x[2] and str(x[3] or "").startswith(("up to date", "already up to date")):
+                        st = "uptodate"
+                it.update({"state": st, "msg": x[3] or ""})
+    return {"id": r[0], "k": r[1], "label": r[2], "created_at": r[3], "by": r[4], "items": items}
