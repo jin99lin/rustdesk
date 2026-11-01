@@ -4401,7 +4401,11 @@ bool adolunaCheckPin(String pin, String stored) {
     if (salt.isEmpty || want.length != 32 || iters < 1000 || iters > 1000000) {
       return false;
     }
-    final got = _adolunaPbkdf2(utf8.encode(pin.trim()), salt, iters);
+    // b82+: remote-keyboard input can arrive with stray non-digit chars (numpad nav keys,
+    // legacy-mode translations, a trailing newline). The staff PIN is always digits (enforced
+    // in the admin UI + server), so compare on digits only. The on-screen keypad is unaffected.
+    final clean = pin.replaceAll(RegExp(r'[^0-9]'), '');
+    final got = _adolunaPbkdf2(utf8.encode(clean), salt, iters);
     var diff = 0;
     for (var i = 0; i < 32; i++) {
       diff |= got[i] ^ want[i];
@@ -4452,6 +4456,10 @@ void _adolunaAskPin() async {
         autofocus: true,
         obscureText: true,
         keyboardType: TextInputType.number,
+        inputFormatters: [
+          FilteringTextInputFormatter.digitsOnly,
+          LengthLimitingTextInputFormatter(12),
+        ],
         decoration: InputDecoration(
             errorText: err.isEmpty ? null : err,
             hintText: translate('adoluna-staff-pin-title')),
