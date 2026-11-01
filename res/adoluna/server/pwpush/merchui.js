@@ -29,8 +29,19 @@ async function load(){D=await api("overview");D.mmap={};D.merchants.forEach(m=>D
 const storeLabel=id=>{const s=D&&D.smap[id];return s?LN(s.merchant.name)+" › "+LN(s.name):"—"};
 const posNames=m=>m.access.map(a=>a.name);
 /* ---------- routing ---------- */
-const R=()=>{const m=(location.hash||"").match(/[?&]adm=([\w-]+)/);if(!m)return null;const id=(location.hash.match(/[?&]id=(\d+)/)||[])[1];return{p:m[1],id:id?Number(id):null}};
-const go=(p,id)=>{location.hash="#/?adm="+p+(id!=null?"&id="+id:"")};
+/* b80 (Jay 10/31): clean URL - the page lives in history.state / sessionStorage, the address bar stays "#/".
+   Old links with "#/?adm=page&id=n" still open the page and are rewritten to "#/". */
+const isRoot=()=>/^#\/?$/.test(location.hash||"#/");
+const SK="adoluna_adm";
+const R=()=>{const h=location.hash||"",m=h.match(/^#\/\?(?:.*&)?adm=([\w-]+)/);
+ if(m){const id=(h.match(/[?&]id=(\d+)/)||[])[1];const r={p:m[1],id:id?Number(id):null};try{sessionStorage.setItem(SK,JSON.stringify(r))}catch(e){}history.replaceState({adm:r},"",location.pathname+location.search+"#/");return r}
+ if(!isRoot())return null;const st=history.state&&history.state.adm;if(st)return st;
+ try{return JSON.parse(sessionStorage.getItem(SK)||"null")}catch(e){return null}};
+const go=(p,id)=>{const r={p:p,id:id!=null?Number(id):null};try{sessionStorage.setItem(SK,JSON.stringify(r))}catch(e){}
+ const u=location.pathname+location.search+"#/";if(isRoot())history.pushState({adm:r},"",u);else location.hash="#/";
+ setTimeout(()=>{if(isRoot()&&!(history.state&&history.state.adm))history.replaceState({adm:r},"",u);window.dispatchEvent(new Event("adoluna-adm"))},0)};
+window.addEventListener("popstate",()=>{const st=history.state&&history.state.adm;if(st)try{sessionStorage.setItem(SK,JSON.stringify(st))}catch(e){}setTimeout(()=>window.dispatchEvent(new Event("adoluna-adm")),30)});
+const _ADMS=()=>{const r=R();document.documentElement.dataset.adm=r?r.p:"";return r};
 /* ---------- modal ---------- */
 function modal(html,wide){const m=document.createElement("div");m.className="adp-dlgm";const d=document.createElement("div");d.className="adp-dlg adm-dlg"+(wide?" wide":"");d.innerHTML=html;document.body.append(m,d);
  const close=()=>{m.remove();d.remove()};m.onclick=close;d.querySelectorAll("[data-c]").forEach(b=>b.onclick=close);return{d,close}}
@@ -91,7 +102,7 @@ function pushDlg(ids){const L=ids.map(i=>D.devices.find(x=>x.id===i)).filter(Boo
   '<div class="adm-hint" style="margin-top:8px">'+T("在线设备约 15 秒内生效，离线设备下次上线时生效。进度看「日志 › 密码推送记录」。","Online devices update in about 15 seconds, offline ones when they next come online. Track progress in Logs › Password Push Log.")+'</div>',
   T("推送","Push"),async dd=>{const mode=dd.querySelector("input[name=pm]:checked").value,body={ids:L.map(x=>x.id),mode};
    if(mode==="own"){const a=dd.querySelector("#adm-q1").value,b=dd.querySelector("#adm-q2").value;if(a.length<8||a.length>64)throw new Error(T("密码长度需 8–64 位","Password must be 8–64 characters"));if(a!==b)throw new Error(T("两次输入不一致","The two passwords don't match"));body.password=a}
-   const r=await api("push",body);SEL.clear();toast(T("已推送 "+r.pushed.length+" 台","Pushed to "+r.pushed.length)+(r.skipped.length?T("，跳过 "+r.skipped.length+" 台（没有可推送的密码）",", skipped "+r.skipped.length+" (no password to push)"):""),r.skipped.length&&!r.pushed.length)});
+   const r=await api("push",body);window.ADM_FAST=Date.now()+120000;SEL.clear();toast(T("已推送 "+r.pushed.length+" 台","Pushed to "+r.pushed.length)+(r.skipped.length?T("，跳过 "+r.skipped.length+" 台（没有可推送的密码）",", skipped "+r.skipped.length+" (no password to push)"):""),r.skipped.length&&!r.pushed.length)});
  d.querySelectorAll("input[name=pm]").forEach(x=>x.onchange=()=>{if(!x.checked)return;const o=x.value==="own";d.querySelector("#adm-pwn").classList.toggle("hidden",!o);const h=d.querySelector("#adm-pwh");if(h)h.classList.toggle("hidden",o)})}
 const ACCT="/_admin/adoluna-api/acct/";
 const admClose2=()=>document.querySelectorAll(".adm-dlg").forEach(d=>{const m=d.previousElementSibling;if(m&&m.classList.contains("adp-dlgm"))m.remove();d.remove()});
@@ -234,7 +245,7 @@ function pMerchant(root,id){const m=D.mmap[id];if(!m){root.innerHTML='<div class
  root.querySelectorAll("[data-rs]").forEach(b=>b.onclick=()=>{const s=D.smap[b.dataset.rs];confirmDlg(T("门店改名","Rename store"),'<input id="adm-sn" value="'+esc(s.name)+'">',T("保存","Save"),async dd=>{await api("store/update",{id:s.id,name:dd.querySelector("#adm-sn").value});toast(T("已改名","Renamed"))})});
  root.querySelectorAll("[data-ds]").forEach(b=>b.onclick=()=>{const s=D.smap[b.dataset.ds];confirmDlg(T("删除门店","Delete store"),T("确定删除门店「"+esc(LN(s.name))+"」？","Delete store “"+esc(LN(s.name))+"”?"),T("删除","Delete"),async()=>{await api("store/delete",{id:s.id});toast(T("已删除","Deleted"))},1)});
  root.querySelectorAll("[data-ad]").forEach(b=>b.onclick=()=>addDevDlg(Number(b.dataset.ad)));
- on("#adm-pw",()=>{const d=confirmDlg(m.pw.set?T("更换设备密码","Change device password"):T("设置设备密码","Set device password"),'<div class="adm-hint">'+T("这家商家所有门店的设备都会换成这个密码（设了单独密码的除外）。在线设备约 15 秒生效，离线设备上线后生效。密码加密保存，后台也看不到。","All devices in this merchant's stores switch to this password, except those with a custom password. Online devices update in about 15 seconds, offline ones when they come back online. The password is stored encrypted and can't be viewed.")+'</div><div class="adm-row"><input id="adm-p1" type="password" autocomplete="new-password" placeholder="'+T("新密码（8–64 位）","New password (8–64 characters)")+'"><button class="btn sm" id="adm-gen">'+T("生成","Generate")+'</button></div><input id="adm-p2" type="password" autocomplete="new-password" placeholder="'+T("确认新密码","Confirm new password")+'">',T("保存并推送","Save & push"),async dd=>{const a=dd.querySelector("#adm-p1").value;if(a!==dd.querySelector("#adm-p2").value)throw new Error(T("两次输入不一致","The two passwords don't match"));await api("merchant/password",{id:m.id,password:a});toast(T("已保存，正在推送","Saved. Pushing now…"))});
+ on("#adm-pw",()=>{const d=confirmDlg(m.pw.set?T("更换设备密码","Change device password"):T("设置设备密码","Set device password"),'<div class="adm-hint">'+T("这家商家所有门店的设备都会换成这个密码（设了单独密码的除外）。在线设备约 15 秒生效，离线设备上线后生效。密码加密保存，后台也看不到。","All devices in this merchant's stores switch to this password, except those with a custom password. Online devices update in about 15 seconds, offline ones when they come back online. The password is stored encrypted and can't be viewed.")+'</div><div class="adm-row"><input id="adm-p1" type="password" autocomplete="new-password" placeholder="'+T("新密码（8–64 位）","New password (8–64 characters)")+'"><button class="btn sm" id="adm-gen">'+T("生成","Generate")+'</button></div><input id="adm-p2" type="password" autocomplete="new-password" placeholder="'+T("确认新密码","Confirm new password")+'">',T("保存并推送","Save & push"),async dd=>{const a=dd.querySelector("#adm-p1").value;if(a!==dd.querySelector("#adm-p2").value)throw new Error(T("两次输入不一致","The two passwords don't match"));window.ADM_FAST=Date.now()+120000;await api("merchant/password",{id:m.id,password:a});toast(T("已保存，正在推送","Saved. Pushing now…"))});
   d.querySelector("#adm-gen").onclick=()=>{const p=genPw();["#adm-p1","#adm-p2"].forEach(s=>{const i=d.querySelector(s);i.value=p;i.type="text"})}});
  on("#adm-accx",()=>{ACCX=m.id;render()});
  on("#adm-ep",()=>{const cur=m.access.filter(a=>a.whole).map(a=>a.id);
@@ -293,6 +304,17 @@ function pPositions(root,id){if(!D.me.admin){root.innerHTML='<div class="card ad
  root.querySelector("#adm-sv").onclick=async e=>{e.target.disabled=true;try{await api("position",{id:PE.id,name:PE.name,level:PE.level,members:[...PE.members],access:{all:PE.all,merchants:[...PE.m],stores:[...PE.s]}});PE=null;toast(T("已保存，成员的访问权限已更新","Saved. Members' access updated"));await refresh()}catch(x){toast(x.message,1);e.target.disabled=false}};
  root.querySelector("#adm-rp").onclick=()=>confirmDlg(T("职位改名","Rename position"),'<input id="adm-pn" value="'+esc(PE.name)+'">',T("保存","Save"),async dd=>{PE.name=dd.querySelector("#adm-pn").value;await api("position",{id:PE.id,name:PE.name,level:PE.level});PE=null});
  root.querySelector("#adm-dp").onclick=()=>confirmDlg(T("删除职位","Delete position"),T("删除「"+esc(PE.name)+"」后，只靠这个职位访问的员工会失去这些设备。","Staff who only had access through “"+esc(PE.name)+"” lose access to those devices."),T("删除","Delete"),async()=>{await api("position/delete",{id:PE.id});PE=null;setTimeout(()=>go("positions"),50)},1)}
+/* b80 (Jay 10/31): staff PIN - technicians tap the version number in the client 5 times and enter it to unlock
+   advanced settings.  Only a salted hash goes to devices (signed command channel); the PIN is never shown again. */
+function pinCard(root){const c=document.createElement("div");c.className="card";c.id="adm-pin";c.style.marginBottom="12px";const card=root.querySelector(".card");card&&card.parentNode.insertBefore(c,card);
+ const draw=st=>{c.innerHTML='<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>'+T("员工 PIN（客户端高级设置解锁）","Staff PIN (unlocks advanced settings in the app)")+'</b><div class="adm-hint">'+T("在客户端连点版本号 5 次，输入这个 PIN 即可打开高级设置。PIN 只以加密哈希下发到设备，在线设备约 15 秒内生效，需要 b80 及以后。","Tap the version number in the app 5 times and enter this PIN to open advanced settings. Devices only receive a salted hash; online devices update in about 15 seconds. Needs build 80 or later.")+'</div></div><div>'+
+  (st.set?'<span class="adm-chip">●●●● '+T("已设置","Set")+' · v'+st.v+'</span> <span class="adm-mute sm">'+T("已下发 "+(st.delivered||0)+" 台 · 已生效 "+(st.applied||0)+" 台","Sent to "+(st.delivered||0)+" · applied on "+(st.applied||0))+'</span>':'<span class="adm-mute">'+T("未设置（客户端无法解锁）","Not set (the app can't be unlocked)")+'</span>')+
+  '</div><button class="btn pri sm" data-ps>'+(st.set?T("更换 PIN","Change PIN"):T("设置 PIN","Set PIN"))+'</button>'+(st.set?'<button class="btn sm danger" data-pc>'+T("清除","Clear")+'</button>':'')+'</div>';
+  c.querySelector("[data-ps]").onclick=()=>{const{d,close}=modal('<h4>'+T("设置员工 PIN","Set staff PIN")+'</h4><div class="adm-dbody"><label class="adm-l">'+T("新 PIN（4-12 位数字）","New PIN (4-12 digits)")+'</label><input id="adm-p1" type="password" inputmode="numeric" autocomplete="new-password"><label class="adm-l">'+T("再输一次","Repeat")+'</label><input id="adm-p2" type="password" inputmode="numeric" autocomplete="new-password"><div class="adm-hint">'+T("保存后无法再查看，请告诉需要的员工。旧 PIN 立即失效。","It can't be viewed after saving - tell the staff who need it. The old PIN stops working.")+'</div></div><div class="adm-dfoot"><button class="btn" data-c>'+T("取消","Cancel")+'</button><button class="btn pri" data-o>'+T("保存并下发","Save & send")+'</button></div>');
+   d.querySelector("[data-o]").onclick=async()=>{const a=d.querySelector("#adm-p1").value.trim(),b=d.querySelector("#adm-p2").value.trim();if(!/^[0-9]{4,12}$/.test(a))return toast(T("PIN 须为 4-12 位数字","PIN must be 4-12 digits"),1);if(a!==b)return toast(T("两次输入不一致","PINs don't match"),1);
+    try{const st=await api("/_admin/adoluna-api/staff-pin",{pin:a});close();toast(T("已保存，正在下发","Saved, sending to devices"));draw(st)}catch(e){toast(T("失败：","Failed: ")+e.message,1)}}};
+  const cl=c.querySelector("[data-pc]");if(cl)cl.onclick=()=>confirmDlg(T("清除员工 PIN？","Clear the staff PIN?"),T("清除后所有客户端都不能再用 PIN 解锁高级设置。","After clearing, no app can unlock advanced settings with a PIN."),T("清除","Clear"),async()=>{draw(await api("/_admin/adoluna-api/staff-pin",{pin:""}))},1)};
+ c.innerHTML='<span class="adm-mute">'+T("读取员工 PIN…","Loading staff PIN…")+'</span>';api("/_admin/adoluna-api/staff-pin").then(draw).catch(e=>{c.innerHTML='<span class="adm-mute">'+T("员工 PIN：需在内网用管理员登录","Staff PIN: sign in as admin on the internal network")+'</span>'})}
 function pStaff(root){if(!D.me.admin){root.innerHTML='<div class="card adm-empty">'+T("只有管理员可以管理员工","Only admins can manage staff")+'</div>';return}
  const pos=u=>D.positions.filter(p=>p.members.includes(u.id));const admins=D.users.filter(u=>u.is_admin&&u.status===1);
  const lastAdm=u=>u.is_admin&&u.status===1&&admins.length<=1;
@@ -305,7 +327,7 @@ function pStaff(root){if(!D.me.admin){root.innerHTML='<div class="card adm-empty
  const U=id=>D.users.find(x=>x.id===Number(id));
  root.querySelectorAll("[data-adm]").forEach(c=>c.onchange=()=>{const u=U(c.dataset.adm);c.checked=!c.checked;confirmDlg(u.is_admin?T("取消管理员","Remove admin"):T("设为管理员","Make admin"),u.is_admin?T("取消后，"+esc(u.username)+" 只能访问职位里的商家。","After this, "+esc(u.username)+" only sees merchants from their positions."):T(esc(u.username)+" 将能访问全部商家、做全部操作。",esc(u.username)+" will access every merchant and can do everything."),T("确定","Confirm"),async()=>{await api("staff",{user_id:u.id,is_admin:!u.is_admin});toast(T("已保存","Saved"))})});
  root.querySelectorAll("[data-ed]").forEach(b=>b.onclick=()=>editStaffDlg(U(b.dataset.ed),pos(U(b.dataset.ed)).map(p=>p.id)));
- root.querySelector("#adm-nu").onclick=newStaffDlg;
+ root.querySelector("#adm-nu").onclick=newStaffDlg;pinCard(root);
  root.querySelectorAll("[data-rp]").forEach(b=>b.onclick=()=>{const u=U(b.dataset.rp);confirmDlg(T("重设密码：","Reset password: ")+esc(u.username),T("会生成一个临时密码（只显示一次），对方用它登录后必须先改成自己的密码，所有设备上的登录会被退出。","Creates a temporary password (shown once). They must change it after signing in, and are signed out everywhere."),T("生成临时密码","Create temporary password"),async()=>{const tp=await adminReset(u.id);setTimeout(()=>tempPwDlg(u.username,tp),50)})});
  root.querySelectorAll("[data-st]").forEach(b=>b.onclick=()=>{const u=U(b.dataset.st),on=u.status===1;
   on?confirmDlg(T("停用员工：","Deactivate: ")+esc(uLabel(u)),'<ul class="adm-ul"><li>'+T("马上不能登录后台，已登录的地方会被退出","Can't sign in to the admin any more; signed out everywhere right away")+'</li><li>'+T("客户端的免密码连接立刻失效，连不上任何设备","Password-free access in the app stops right away; no devices can be reached")+'</li><li>'+T("职位和记录都保留，以后可以点「启用」恢复","Positions and records are kept; click Activate to restore")+'</li></ul>',T("停用","Deactivate"),async()=>{await api("staff/status",{user_id:u.id,active:false});toast(T("已停用","Deactivated"))},1)
@@ -347,7 +369,7 @@ async function pLogs(root){root.innerHTML=head(T("日志","Logs"),T("登录、�
  '<div class="adm-tabs">'+LTABS.map(x=>'<div class="adm-tab'+(x[0]===LT?" on":"")+'" data-lt="'+x[0]+'">'+T(x[1],x[2])+'</div>').join("")+'</div><div class="card" id="adm-lg">'+T("读取中…","Loading…")+'</div>';
  root.querySelectorAll("[data-lt]").forEach(x=>x.onclick=()=>{LT=x.dataset.lt;pLogs(root)});
  const draw=async()=>{const box=root.querySelector("#adm-lg");try{const h=await logTab(LT);if(box.isConnected){box.innerHTML=h;const u=box.querySelector("#adm-upd");if(u)u.textContent=T("每 10 秒自动刷新 · ","Refreshes every 10 seconds · ")+new Date().toLocaleTimeString(EN()?"en-US":"zh-CN",{timeZone:"America/New_York",hour12:false})+" ET"}}catch(e){if(box.isConnected)box.textContent=T("读取失败：","Failed to load: ")+e.message}};
- clearInterval(LTI);await draw();if(LT==="push")LTI=setInterval(()=>{const b=root.querySelector("#adm-lg");if(!b||!b.isConnected||!/adm=logs/.test(location.hash)||LT!=="push")return clearInterval(LTI);if(!document.querySelector(".adm-dlg"))draw()},10000)}
+ clearInterval(LTI);await draw();if(LT==="push")LTI=setInterval(()=>{const b=root.querySelector("#adm-lg");if(!b||!b.isConnected||!((R()||{}).p==="logs")||LT!=="push")return clearInterval(LTI);if(!document.querySelector(".adm-dlg"))draw()},10000)}
 /* ---------- shell: nav, search, mount ---------- */
 const PAGES={merchants:pMerchants,m:pMerchant,unassigned:pUnassigned,devices:pDevices,positions:pPositions,staff:pStaff,logs:pLogs};
 const COLK="adoluna_sidebar_collapsed",isCol=()=>localStorage.getItem(COLK)==="1";
@@ -404,21 +426,24 @@ document.addEventListener("keydown",e=>{if((e.metaKey||e.ctrlKey)&&e.key.toLower
 let root=null;
 function render(){const r=R();if(!r||!root||!D)return;const f=PAGES[r.p]||pMerchants;const y=window.scrollY;f(root,r.id);nav();window.scrollTo(0,y);if(DR)drFill()}
 async function refresh(){try{await load()}catch(e){toast(e.message,1)}render()}
-function mount(){const r=R(),main=document.querySelector(".app-main");if(!main)return;
+function mount(){const r=_ADMS(),main=document.querySelector(".app-main");if(!main)return;
  if(!r){const o=document.getElementById("adm");if(o){o.remove();[...main.children].forEach(c=>{if(c.id!=="adp")c.classList.remove("adp-hidden")})}return}
  [...main.children].forEach(c=>{if(c.id!=="adm")c.classList.add("adp-hidden")});
  const key=r.p+":"+r.id+":"+EN();if(root&&root.isConnected&&root.dataset.k===key)return;
  if(!root||!root.isConnected){root=document.createElement("div");root.id="adm";main.appendChild(root)}root.dataset.k=key;window.scrollTo(0,0);
  if(D)render();else{root.innerHTML='<div class="card adm-empty">'+T("读取中…","Loading…")+'</div>';load().then(render).catch(e=>{root.innerHTML='<div class="card adm-empty" style="color:#C62828">'+T("读取失败，请在公司网络下登录后再试：","Couldn't load. Sign in from the office network and try again: ")+esc(e.message)+'</div>'})}}
 const onLogin=()=>/^#\/login(\?|$)/.test(location.hash||"");
-let landed=false;function landing(){if(landed||onLogin()||!tok()||!document.querySelector(".app-main"))return;landed=true;if(/^#\/?$/.test(location.hash||"#/"))go("merchants")}
+let landed=false;function landing(){if(landed||onLogin()||!tok()||!document.querySelector(".app-main"))return;landed=true;if(isRoot()&&!R())go("merchants")}
 let lang=LG();function tick(){if(onLogin()){D=null;ME=null;landed=false;return}if(LG()!==lang){lang=LG();["adm-gs","adm-nav","adm-um"].forEach(i=>{const x=document.getElementById(i);if(x)x.remove()});if(root)root.dataset.k=""}
  landing();nav();search();userMenu();mount()}
 let tt=0;new MutationObserver(()=>{clearTimeout(tt);tt=setTimeout(tick,80)}).observe(document.documentElement,{childList:true,subtree:true});
-window.addEventListener("hashchange",()=>{drClose();setTimeout(tick,50)});
+window.addEventListener("hashchange",()=>{drClose();if(!isRoot())try{sessionStorage.removeItem(SK)}catch(e){}setTimeout(tick,50)});
+window.addEventListener("adoluna-adm",()=>{drClose();admCloseAll();tick()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&DR&&!document.querySelector(".adm-dlg"))drClose()});
-setInterval(()=>{if(R()&&root&&root.isConnected&&!document.querySelector(".adm-dlg,.adm-menu,#adm-dr,.adm-sp:not(.hidden)")&&!(document.activeElement&&/INPUT|SELECT/.test(document.activeElement.tagName))&&!PE)refresh();else if(!R()&&tok()&&!onLogin())load().then(()=>nav()).catch(()=>{})},30000);
+/* b80: password push status refreshes by itself - every 5 s for 2 min after a push, otherwise every 30 s */
+let LASTR=Date.now();setInterval(()=>{if(Date.now()<(window.ADM_FAST||0)?Date.now()-LASTR<5000:Date.now()-LASTR<30000)return;LASTR=Date.now();if(R()&&root&&root.isConnected&&!document.querySelector(".adm-dlg,.adm-menu,#adm-dr,.adm-sp:not(.hidden)")&&!(document.activeElement&&/INPUT|SELECT/.test(document.activeElement.tagName))&&!PE)refresh();else if(!R()&&tok()&&!onLogin())load().then(()=>nav()).catch(()=>{})},5000);
 })();
+function admCloseAll(){document.querySelectorAll(".adm-dlg").forEach(d=>{const m=d.previousElementSibling;if(m&&m.classList.contains("adp-dlgm"))m.remove();d.remove()})}
 // close merchant dialogs on Esc or when the page changes
 const admClose=()=>document.querySelectorAll(".adm-dlg").forEach(d=>{const m=d.previousElementSibling;if(m&&m.classList.contains("adp-dlgm"))m.remove();d.remove()});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&document.querySelector(".adm-dlg"))admClose()});

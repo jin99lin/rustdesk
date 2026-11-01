@@ -33,6 +33,29 @@ class Unit(unittest.TestCase):
         D.queue(self.c, "123", "reboot", {}, "t", now=1000)
         self.assertEqual(D.on_heartbeat(self.c, self.k, {"id": "123", "adoluna_cmd_n": n}, now=99999), [])
 
+    def test_staff_pin(self):
+        import hashlib
+        self.assertRaises(ValueError, D.set_staff_pin, self.c, "12a4", "t")
+        self.assertRaises(ValueError, D.set_staff_pin, self.c, "123", "t")
+        v = D.set_staff_pin(self.c, "246810", "t", now=1000)
+        row = self.c.execute("select payload from staff_pin").fetchone()[0]
+        self.assertTrue(row.startswith("enc1:")); self.assertNotIn("246810", row)
+        out = D.on_heartbeat(self.c, self.k, {"id": "7", "adoluna_cmd_n": 0}, now=1001)
+        x = [o for o in out if o["k"] == "staff_pin"][0]; p = json.loads(x["p"])
+        self.assertEqual(p["h"], hashlib.pbkdf2_hmac("sha256", b"246810", bytes.fromhex(p["s"]), p["i"], 32).hex())
+        self.assertEqual(p["v"], v); self.assertNotIn("246810", x["p"])
+        # once per version: not queued again
+        D.on_heartbeat(self.c, self.k, {"id": "7", "adoluna_cmd_n": x["n"], "adoluna_ack": [{"n": x["n"], "ok": True}]}, now=1002)
+        self.assertEqual(self.c.execute("select count(*) from dev_cmds where k='staff_pin'").fetchone()[0], 1)
+        self.assertEqual(self.c.execute("select p from dev_cmds where k='staff_pin'").fetchone()[0], "{}")  # scrubbed after ack
+        st = D.staff_pin_status(self.c); self.assertEqual((st["set"], st["delivered"], st["applied"]), (True, 1, 1))
+        # change: new version goes out, an undelivered older one is superseded
+        D.set_staff_pin(self.c, "1357", "t", now=1003)
+        D.set_staff_pin(self.c, "", "t", now=1004)
+        out = D.on_heartbeat(self.c, self.k, {"id": "7", "adoluna_cmd_n": x["n"]}, now=1005)
+        self.assertEqual([json.loads(o["p"])["h"] for o in out if o["k"] == "staff_pin"], [""])
+        self.assertFalse(D.staff_pin_status(self.c)["set"])
+
     def test_validate(self):
         self.assertIsNone(D.validate("install", {"url": "https://x/a.apk", "sha256": "A" * 64}))
         self.assertTrue(D.validate("install", {"url": "https://x/a.apk"}))
@@ -159,6 +182,13 @@ class Sidecar(unittest.TestCase):
         s, o = self.req("/_admin/adoluna-api/dev/otp?id=100", tok="admintok"); self.assertEqual((s, len(o["otp"])), (200, 8))
         s, r = self.req("/_admin/adoluna-api/releases", {"platform": "windows", "url": "https://x/a.msi", "sha256": "c" * 64, "auto": True}, "admintok")
         self.assertEqual(r["releases"][0]["platform"], "windows")
+        # b80 staff PIN: admin only, never echoed, delivered as hash
+        self.assertEqual(self.req("/_admin/adoluna-api/staff-pin", {"pin": "9999"}, "stafftok")[0], 403)
+        self.assertEqual(self.req("/_admin/adoluna-api/staff-pin", {"pin": "99"}, "admintok")[0], 400)
+        s, st = self.req("/_admin/adoluna-api/staff-pin", {"pin": "98765"}, "admintok")
+        self.assertEqual((s, st["set"]), (200, True)); self.assertNotIn("98765", json.dumps(st))
+        _, h = self.req("/api/heartbeat", {"id": "100", "adoluna_cmd_n": n})
+        self.assertIn("staff_pin", [c["k"] for c in h.get("adoluna_cmd", [])]); self.assertNotIn("98765", json.dumps(h))
 
 if __name__ == "__main__":
     unittest.main()

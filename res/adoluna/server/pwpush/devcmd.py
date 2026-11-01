@@ -8,7 +8,7 @@ unlock codes are shown once to the admin and only sha256(salt+code) goes to the 
 import base64, hashlib, hmac, json, re, secrets, time
 
 KINDS = {"ping", "info", "reboot", "install", "update", "kiosk_lock", "kiosk_unlock", "policy",
-         "unlock_code", "otp_secret"}
+         "unlock_code", "otp_secret", "staff_pin"}
 TTL = {"reboot": 3600}
 DEFAULT_TTL = 7 * 86400
 SHA = re.compile(r"^[0-9a-f]{64}$")
@@ -23,12 +23,15 @@ SCHEMA = """
   create table if not exists releases(platform text primary key, url text, sha256 text, label text, auto integer,
     ts integer, by text);
   create table if not exists dev_rel(peer_id text, platform text, rel_ts integer, primary key(peer_id, platform));
+  create table if not exists staff_pin(id integer primary key check(id=1), v integer not null, payload text not null,
+    ts integer, by text);
+  create table if not exists dev_pin(peer_id text primary key, v integer not null);
 """
 
 # --- at-rest encryption for secret material (OTP seeds, unlock-code hashes) ---
 # stdlib-only: HMAC-SHA256 keystream (encrypt) + HMAC-SHA256 tag (authenticate). Key file lives next to the
 # signing keys in PW_DIR (0600), never in the DB.
-SECRET_KINDS = {"otp_secret", "unlock_code"}
+SECRET_KINDS = {"otp_secret", "unlock_code", "staff_pin"}
 _KEY = None
 
 def set_key_dir(d):
@@ -171,7 +174,7 @@ def on_heartbeat(c, key, q, now=None):
         except Exception:
             pass
     # scrub delivered+acked secret payloads entirely
-    c.execute("update dev_cmds set p='{}' where peer_id=? and acked_at is not null and k in ('otp_secret','unlock_code')", (dev,))
+    c.execute("update dev_cmds set p='{}' where peer_id=? and acked_at is not null and k in ('otp_secret','unlock_code','staff_pin')", (dev,))
     last = int(q.get("adoluna_cmd_n") or 0)
     # auto-update release policy (once per device per release)
     plat = platform_of(info) if isinstance(info, dict) else ""
@@ -182,6 +185,14 @@ def on_heartbeat(c, key, q, now=None):
             if not seen or seen[0] < r[3]:
                 c.execute("insert or replace into dev_rel(peer_id,platform,rel_ts) values(?,?,?)", (dev, plat, r[3]))
                 queue(c, dev, "update", {"url": r[0], "sha256": r[1], "label": r[2] or "", "auto": True}, "release", now)
+    # b80 staff PIN: every device that talks to us gets the current PIN hash once per PIN version
+    pin = c.execute("select v, payload from staff_pin where id=1").fetchone()
+    if pin:
+        seen = c.execute("select v from dev_pin where peer_id=?", (dev,)).fetchone()
+        if not seen or seen[0] != pin[0]:
+            c.execute("insert or replace into dev_pin(peer_id,v) values(?,?)", (dev, pin[0]))
+            c.execute("update dev_cmds set e=? where peer_id=? and k='staff_pin' and acked_at is null", (now, dev))  # superseded
+            queue(c, dev, "staff_pin", json.loads(unseal(pin[1])), "staff-pin", now)
     rows = c.execute("select id,k,p,e from dev_cmds where peer_id=? and id>? and acked_at is null and e>? order by id limit 10",
                      (dev, last, now)).fetchall()
     out = []
@@ -191,6 +202,41 @@ def on_heartbeat(c, key, q, now=None):
         out.append({"n": n, "k": k, "p": p, "e": e, "sig": sig})
         c.execute("update dev_cmds set delivered_at=coalesce(delivered_at,?) where id=?", (now, n))
     return out
+
+# --- b80 staff PIN (unlocks the technician settings by tapping the version number) ---
+PIN_ITERS = 20000
+PIN_RE = re.compile(r"^[0-9]{4,12}$")
+
+def pin_payload(pin, v, salt=None, iters=PIN_ITERS):
+    salt = salt or secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt), iters, 32).hex()
+    return {"s": salt, "h": h, "i": iters, "v": v}
+
+def set_staff_pin(c, pin, by, now=None):
+    """pin '' = clear (devices get an empty hash and stop accepting any PIN).  Only a salted PBKDF2 hash is kept
+    (sealed at rest); the PIN itself is never stored or logged.  Returns the new version."""
+    pin = str(pin or "").strip()
+    if pin and not PIN_RE.match(pin):
+        raise ValueError("pin")
+    r = c.execute("select v from staff_pin where id=1").fetchone()
+    v = (r[0] if r else 0) + 1
+    p = pin_payload(pin, v) if pin else {"s": "", "h": "", "i": 0, "v": v}
+    c.execute("insert or replace into staff_pin(id,v,payload,ts,by) values(1,?,?,?,?)",
+              (v, seal(json.dumps(p, separators=(",", ":"), sort_keys=True)), int(now or time.time()), by))
+    return v
+
+def staff_pin_status(c):
+    r = c.execute("select v, payload, ts, by from staff_pin where id=1").fetchone()
+    if not r:
+        return {"set": False, "v": 0}
+    try:
+        on = bool(json.loads(unseal(r[1])).get("h"))
+    except Exception:
+        on = False
+    n = c.execute("select count(*) from dev_pin where v=?", (r[0],)).fetchone()[0]
+    ok = c.execute("select count(distinct peer_id) from dev_cmds where k='staff_pin' and ok=1 and peer_id in "
+                   "(select peer_id from dev_pin where v=?) and created_at>=?", (r[0], r[2] or 0)).fetchone()[0]
+    return {"set": on, "v": r[0], "ts": r[2], "by": r[3], "delivered": n, "applied": ok}
 
 def os_label(i):
     w = i.get("win") if isinstance(i, dict) else None
@@ -219,7 +265,7 @@ def detail(c, dev):
             for x in c.execute("select id,k,p,e,created_at,created_by,delivered_at,acked_at,ok,msg from dev_cmds "
                                "where peer_id=? order by id desc limit 30", (dev,))]
     for x in cmds:  # never echo secrets back to the UI
-        if x["k"] in ("otp_secret", "unlock_code"):
+        if x["k"] in SECRET_KINDS:
             x["p"] = "{}"
     has_otp = bool(c.execute("select 1 from dev_secrets where peer_id=?", (dev,)).fetchone())
     return {"id": dev, "info": json.loads(r[0]) if r else None, "ts": r[1] if r else None, "cmds": cmds, "otp": has_otp}

@@ -131,7 +131,7 @@ async function devLoad(w,p){const box=w.querySelector("#adp-dev");if(!box)return
   return send(k,{})})}
 const isPeerPage=()=>/\/user\/peer(\?|$)/.test(location.hash||"")||/\/user\/peer\/?$/.test(location.pathname);
 const abView=()=>{const h=location.hash||"";return /^#\/user\/addressBook(\?|$)/.test(h)?"absys":/^#\/my\/address_book(\?|$)/.test(h)?"abmy":null};
-const curView=()=>/[?&]adm=/.test(location.hash||"")?null:isPwPage()?"pw":isPeerPage()?"peer":/^#\/(\?.*)?$/.test(location.hash||"")?"mypeer":abView();
+const curView=()=>(/[?&]adm=/.test(location.hash||"")||(/^#\/?$/.test(location.hash||"#/")&&(document.documentElement.dataset.adm||(history.state&&history.state.adm)||sessionStorage.getItem("adoluna_adm"))))?null:isPwPage()?"pw":isPeerPage()?"peer":/^#\/(\?.*)?$/.test(location.hash||"")?"mypeer":abView();
 const deb=(f,ms)=>{let k=0;return(...a)=>{clearTimeout(k);k=setTimeout(()=>f(...a),ms||300)}};
 function mount(){const main=document.querySelector(".app-main")||document.querySelector(".el-main");if(!main)return;const v=curView();if(v!=="pw"){const mi=document.getElementById("adp-menu");if(mi)mi.classList.remove("is-active")}
  const o=document.getElementById("adp");if(o&&o.dataset.v!==v){o.remove();[...main.children].forEach(c=>c.classList.remove("adp-hidden"))}

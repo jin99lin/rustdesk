@@ -159,8 +159,57 @@ def granted(uid, is_admin, peer_id):
         return False
 
 # ---------- reconcile ----------
+def nm(x):
+    """b80: one spelling for bilingual names everywhere ("中文 / English"): trim, single spaces, " / " separator"""
+    import re
+    x = re.sub(r"\s+", " ", str(x or "")).strip()
+    return re.sub(r"\s*/\s*", " / ", x)
+
 def dgroup_name(mname, sname):
     return "%s - %s" % (mname, sname)
+
+def store_labels(stores, merch):
+    """b80 (Jay 10/31): the technician address book lists STORES.  Tag = merchant name when the merchant has one
+    store, otherwise "merchant · store"."""
+    cnt = {}
+    for s in stores:
+        cnt[s["merchant_id"]] = cnt.get(s["merchant_id"], 0) + 1
+    out = {}
+    for s in stores:
+        m = merch.get(s["merchant_id"])
+        if not m:
+            continue
+        out[s["id"]] = m["name"] if cnt[s["merchant_id"]] <= 1 else "%s · %s" % (m["name"], s["name"])
+    return out
+
+def _old_labels(db, col, uid):
+    """earlier store/merchant tags in the managed collection (anything with the " · " store separator)"""
+    return {r[0] for r in db.execute("select name from tags where collection_id=? and user_id=? and name like '% · %'", (col, uid))}
+
+def _sync_groups(db, stores, merch):
+    """b80: keep device groups in step with stores - name "Merchant - Store", missing group recreated,
+    devices pointing at a deleted group go back to unassigned.  Returns number of fixes."""
+    fixes = 0
+    groups = dict(db.execute("select id, name from device_groups").fetchall())
+    for s in stores:
+        m = merch.get(s["merchant_id"])
+        if not m:
+            continue
+        want = dgroup_name(m["name"], s["name"])
+        if s["dgroup_id"] not in groups:
+            g = _new_dgroup(db, want)
+            with md() as c:
+                c.execute("update stores set dgroup_id=? where id=?", (g, s["id"]))
+            s["dgroup_id"] = g; fixes += 1
+        elif groups[s["dgroup_id"]] != want:
+            db.execute("update device_groups set name=?, updated_at=? where id=?", (want, ts(), s["dgroup_id"])); fixes += 1
+    valid = set(groups) | {s["dgroup_id"] for s in stores}
+    for (pid, g) in db.execute("select id, group_id from peers where group_id<>0 and group_id is not null").fetchall():
+        if g not in valid:
+            db.execute("update peers set group_id=0, updated_at=? where id=?", (ts(), pid)); fixes += 1
+    if fixes:
+        bust()
+    return fixes
 
 def reconcile():
     """Make address books match the merchant model.  Idempotent; returns counts."""
@@ -168,8 +217,10 @@ def reconcile():
         c = md(); stores = stores_all(c); merch = {m["id"]: m for m in merchants_all(c)}; pos = positions_all(c)
         sab = dict(c.execute("select user_id, collection_id from staff_ab").fetchall())
         by_dg = {s["dgroup_id"]: s for s in stores}
+        labels = store_labels(stores, merch)
         db = rw(); n = {"added": 0, "updated": 0, "removed": 0, "collections": 0}
         try:
+            n["groups"] = _sync_groups(db, stores, merch)
             peers = db.execute("select id, hostname, alias, os, group_id from peers").fetchall()
             users = db.execute("select id, is_admin, status from users").fetchall()
             for uid, adm, status in users:
@@ -178,7 +229,7 @@ def reconcile():
                 for pid, h, a, o, g in peers:
                     s = by_dg.get(g)
                     if s and s["id"] in acc:
-                        want[str(pid)] = (a or "", h or "", platform(o), merch[s["merchant_id"]]["name"])
+                        want[str(pid)] = (a or "", h or "", platform(o), labels[s["id"]])
                 col = sab.get(uid)
                 if col and not db.execute("select 1 from address_book_collections where id=?", (col,)).fetchone():
                     col = None
@@ -188,7 +239,7 @@ def reconcile():
                     cur = db.execute("insert into address_book_collections(user_id, name, created_at, updated_at) values(?,?,?,?)",
                                      (uid, MANAGED_NAME, ts(), ts()))
                     col = cur.lastrowid; c.execute("insert or replace into staff_ab values(?,?)", (uid, col)); n["collections"] += 1
-                mtags = {m["name"] for m in merch.values()}
+                mtags = {m["name"] for m in merch.values()} | set(labels.values()) | _old_labels(db, col, uid)
                 seen = set()
                 for row_id, pid, alias, plat, tags, hn in db.execute(
                         "select row_id, id, alias, platform, tags, hostname from address_books where collection_id=? and user_id=? order by row_id",
@@ -211,6 +262,10 @@ def reconcile():
                                    "force_always_relay, rdp_port, rdp_username, online, login_name, same_server, collection_id, created_at, updated_at) "
                                    "values(?,'','',?,?,?,?,'',?,0,'','',0,'',0,?,?,?)",
                                    (pid, h, a, p, json.dumps([mt], ensure_ascii=False), uid, col, ts(), ts())); n["added"] += 1
+                used = {w[3] for w in want.values()}
+                for (tn,) in db.execute("select name from tags where collection_id=? and user_id=?", (col, uid)).fetchall():
+                    if tn in mtags and tn not in used:  # b80: store list follows the stores, stale ones disappear
+                        db.execute("delete from tags where collection_id=? and user_id=? and name=?", (col, uid, tn))
                 have = {r[0] for r in db.execute("select name from tags where collection_id=? and user_id=?", (col, uid))}
                 for mt in {w[3] for w in want.values()} - have:
                     db.execute("insert into tags(name, user_id, color, collection_id, created_at, updated_at) values(?,?,?,?,?,?)",
@@ -241,7 +296,7 @@ def _new_dgroup(db, name):
     return db.execute("insert into device_groups(name, created_at, updated_at) values(?,?,?)", (name, ts(), ts())).lastrowid
 
 def create_merchant(name, address, store, position_ids, by):
-    name, store = (name or "").strip(), (store or "").strip() or "总店 Main"
+    name, store = nm(name), nm(store) or "总店 Main"
     if not name:
         raise Err("name")
     with LOCK:
@@ -266,7 +321,7 @@ def _sync_dg(where, arg):
     db.commit(); db.close()
 
 def update_merchant(mid, name, address, by):
-    name = (name or "").strip()
+    name = nm(name)
     if not name:
         raise Err("name")
     with LOCK, md() as c:
@@ -298,7 +353,7 @@ def delete_merchant(mid, by):
     log(by, "", "", "删除商家 #%s" % mid)
 
 def add_store(mid, name, by):
-    name = (name or "").strip()
+    name = nm(name)
     if not name:
         raise Err("name")
     with LOCK:
@@ -311,7 +366,7 @@ def add_store(mid, name, by):
     log(by, "", "", "新建门店 %s › %s" % (m[0], name)); return sid
 
 def rename_store(sid, name, by):
-    name = (name or "").strip()
+    name = nm(name)
     if not name:
         raise Err("name")
     with LOCK, md() as c:

@@ -136,6 +136,24 @@ def fix_platform(body):
         pass
     return body
 
+def fill_ab_platform():
+    """b80 (Jay 10/31): address-book rows created in a batch had no platform (no icon) until the next reconcile.
+    Fill platform from the device's OS for every row that is empty or not one of the client's names."""
+    try:
+        db = M.rw()
+        try:
+            os_of = dict(db.execute("select id, os from peers").fetchall()); n = 0
+            for row_id, pid, plat in db.execute("select row_id, id, platform from address_books "
+                                                "where platform not in ('Windows','Mac OS','Linux','Android','iOS') or platform is null").fetchall():
+                p = M.platform(os_of.get(pid) or plat)
+                if p and p != plat:
+                    db.execute("update address_books set platform=? where row_id=?", (p, row_id)); n += 1
+            db.commit(); return n
+        finally:
+            db.close()
+    except Exception:
+        return 0
+
 def device_index():
     """Compact list of every device with its store (device group) and address-book tags, for the admin search box."""
     c = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=3)
@@ -399,7 +417,7 @@ class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = int(os.environ.get("PW_SOCK_TIMEOUT", "30"))  # idle/slow client socket timeout (keep-alive, slow body)
     def log_message(self, fmt, *a):
-        if "/_admin/adoluna" in self.path:
+        if "/_admin/adoluna" in getattr(self, "path", ""):  # b80: a timed-out request has no .path yet
             sys.stderr.write("%s %s\n" % (self.address_string(), fmt % a))
 
     def upstream(self, method, path, body, headers):
@@ -465,6 +483,8 @@ class H(BaseHTTPRequestHandler):
                     ACC.set_must(cur[0], False)
             except Exception:
                 pass
+        if path0 in AB_WRITE and self.command == "POST" and r.status == 200:
+            fill_ab_platform()  # b80: batchCreate sends no platform - fill it from the device right away
         if self.command == "POST" and self.path.split("?")[0] == "/api/heartbeat" and r.status == 200:
             data = self.add_pw(body, data)
             data = self.add_cfg(body, data)
@@ -473,9 +493,9 @@ class H(BaseHTTPRequestHandler):
         if idx and r.status == 200 and b"</head>" in data and PEERUI:
             data = data.replace(b"<head>", b"<head><script>try{if(!localStorage.getItem('adoluna_lang_init')){localStorage.setItem('lang','zh-CN');"
                                 b"localStorage.setItem('adoluna_lang_init','1')}}catch(e){}</script>", 1)
-            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=9">'
-                                b'<script src="/_admin/adoluna-peerui.js?v=9" defer></script>'
-                                b'<link rel="stylesheet" href="/_admin/adoluna-merchui.css?v=6"><script src="/_admin/adoluna-merchui.js?v=6" defer></script></head>', 1)
+            data = data.replace(b"</head>", b'<link rel="stylesheet" href="/_admin/adoluna-peerui.css?v=10">'
+                                b'<script src="/_admin/adoluna-peerui.js?v=10" defer></script>'
+                                b'<link rel="stylesheet" href="/_admin/adoluna-merchui.css?v=7"><script src="/_admin/adoluna-merchui.js?v=7" defer></script></head>', 1)
             extra = [(k, v) for k, v in extra if k.lower() not in ("etag", "last-modified", "cache-control")] + [("Cache-Control", "no-store")]
         if ent and r.status == 200 and PEERUI:  # admin build hides these menus; admins need Users (email, reset password)
             for a, b in UNHIDE:
@@ -573,6 +593,18 @@ class H(BaseHTTPRequestHandler):
                 sys.stderr.write("release %s auto=%s by %s\n" % (plat, bool(q.get("auto")), by))
             with acl() as c:
                 return self.send(200, json.dumps({"releases": D.releases(c)}).encode())
+        if path == "/_admin/adoluna-api/staff-pin":
+            # b80: staff PIN for the client's version-tap unlock. The PIN is never stored, echoed or logged.
+            if self.command == "POST":
+                try:
+                    with acl() as c:
+                        v = D.set_staff_pin(c, body.get("pin", ""), by)
+                except ValueError:
+                    return self.send(400, json.dumps({"error": "PIN 须为 4-12 位数字" if zh else "PIN must be 4-12 digits"}).encode())
+                audit(by, "", "", by, ("员工 PIN 已更新 v%s" % v) if body.get("pin") else ("员工 PIN 已清除 v%s" % v))
+                sys.stderr.write("staff-pin v%s by %s\n" % (v, by))
+            with acl() as c:
+                return self.send(200, json.dumps(D.staff_pin_status(c)).encode(), extra=[("Cache-Control", "no-store")])
         dev = str(qs.get("id", "") if self.command == "GET" else body.get("id", "")).strip()
         if not dev.isdigit() or not known_peer(dev):
             return self.send(400, json.dumps({"error": "设备 ID 无效" if zh else "Invalid device ID"}).encode())
@@ -834,7 +866,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/_admin/adoluna-api/audit":
             return self.audit_list()
         if path in ("/_admin/adoluna-api/dev", "/_admin/adoluna-api/dev/cmd", "/_admin/adoluna-api/dev/otp",
-                    "/_admin/adoluna-api/dev-list", "/_admin/adoluna-api/releases"):
+                    "/_admin/adoluna-api/dev-list", "/_admin/adoluna-api/releases", "/_admin/adoluna-api/staff-pin"):
             return self.dev_admin(path)
         if path != "/_admin/adoluna-api/password":
             return self.send(404, b"{}")
