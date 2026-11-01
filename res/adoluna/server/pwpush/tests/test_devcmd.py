@@ -82,13 +82,48 @@ class Unit(unittest.TestCase):
         self.assertNotIn(self.c.execute("select otp_k from dev_secrets").fetchone()[0], json.dumps(D.detail(self.c, "123")))
 
     def test_release_once_per_device(self):
-        D.set_release(self.c, "windows", "https://x/a.msi", "b" * 64, "b79", True, "t")
+        D.set_release(self.c, "windows", "https://x/a.msi", "b" * 64, "b79", True, "t", 79)
         info = {"platform": "Windows"}
         a = D.on_heartbeat(self.c, self.k, {"id": "1", "adoluna_cmd_n": 0, "adoluna_dev": info})
         self.assertEqual([x["k"] for x in a], ["update"])
         b = D.on_heartbeat(self.c, self.k, {"id": "1", "adoluna_cmd_n": a[0]["n"], "adoluna_dev": info})
         self.assertEqual(b, [])
         self.assertEqual(D.on_heartbeat(self.c, self.k, {"id": "2", "adoluna_cmd_n": 0, "adoluna_dev": {"sdk": 30}}), [])
+
+    def test_update_needs_build_and_msi(self):
+        ok = {"url": "https://x/a.msi", "sha256": "a" * 64, "build": "b81"}
+        self.assertIsNone(D.validate("update", ok, "windows"))
+        self.assertEqual(ok["build"], 81)
+        self.assertIn("build", D.validate("update", {"url": "https://x/a.msi", "sha256": "a" * 64}, "windows"))
+        self.assertIn("build", D.validate("update", {"url": "https://x/a.msi", "sha256": "a" * 64, "build": "1.5.0-b81"}, "windows"))
+        self.assertIn("build", D.validate("update", {"url": "https://x/a.msi", "sha256": "a" * 64, "build": 0}, "windows"))
+        self.assertIn(".msi", D.validate("update", {"url": "https://x/a.exe", "sha256": "a" * 64, "build": 81}, "windows"))
+        self.assertIsNone(D.validate("update", {"url": "https://x/a.MSI?x=1", "sha256": "a" * 64, "build": 81}, "windows"))
+        self.assertIsNone(D.validate("update", {"url": "https://x/a.dmg", "sha256": "a" * 64, "build": 81}, "macos"))
+        self.assertIsNone(D.validate("install", {"url": "https://x/a.exe", "sha256": "a" * 64}, "windows"))
+        with self.assertRaises(ValueError):
+            D.set_release(self.c, "windows", "https://x/a.msi", "b" * 64, "b81", True, "t", None)
+
+    def test_release_compares_build_not_version(self):
+        D.set_release(self.c, "windows", "https://x/a.msi", "b" * 64, "1.5.0-b81", True, "t", 81)
+        same_ver_older = {"platform": "windows", "ver": "1.5.0", "build": 80}
+        a = D.on_heartbeat(self.c, self.k, {"id": "10", "adoluna_cmd_n": 0, "adoluna_dev": same_ver_older})
+        self.assertEqual([x["k"] for x in a], ["update"])
+        self.assertEqual(json.loads(a[0]["p"])["build"], 81)
+        newer = {"platform": "windows", "ver": "1.5.0", "build": 81}
+        self.assertEqual(D.on_heartbeat(self.c, self.k, {"id": "11", "adoluna_cmd_n": 0, "adoluna_dev": newer}), [])
+        legacy = {"platform": "windows", "ver": "1.5.0"}  # pre-b80 client: no build reported -> gets the update
+        self.assertEqual([x["k"] for x in D.on_heartbeat(self.c, self.k, {"id": "12", "adoluna_cmd_n": 0, "adoluna_dev": legacy})], ["update"])
+        self.c.execute("update releases set build=null")
+        self.c.execute("delete from dev_rel")
+        self.assertEqual(D.on_heartbeat(self.c, self.k, {"id": "13", "adoluna_cmd_n": 0, "adoluna_dev": same_ver_older}), [])
+
+    def test_init_migrates_releases_build(self):
+        import sqlite3
+        c = sqlite3.connect(":memory:")
+        c.execute("create table releases(platform text primary key, url text, sha256 text, label text, auto integer, ts integer, by text)")
+        D.init(c)
+        self.assertIn("build", [r[1] for r in c.execute("pragma table_info(releases)")])
 
     def test_windows_caps(self):
         old = {"platform": "windows", "win": {"major": "7", "edition": "Other", "build": "7601"}, "cap": {"install": False, "kiosk": "none", "reason": "os_unsupported"}}
@@ -181,7 +216,18 @@ class Sidecar(unittest.TestCase):
         self.req("/_admin/adoluna-api/dev/cmd", {"id": "100", "k": "otp_secret"}, "admintok")
         s, o = self.req("/_admin/adoluna-api/dev/otp?id=100", tok="admintok"); self.assertEqual((s, len(o["otp"])), (200, 8))
         s, r = self.req("/_admin/adoluna-api/releases", {"platform": "windows", "url": "https://x/a.msi", "sha256": "c" * 64, "auto": True}, "admintok")
+        self.assertEqual(s, 400)  # build number required
+        s, r = self.req("/_admin/adoluna-api/releases", {"platform": "windows", "url": "https://x/a.exe", "sha256": "c" * 64, "auto": True, "build": 81}, "admintok")
+        self.assertEqual(s, 400)  # Windows needs .msi
+        s, r = self.req("/_admin/adoluna-api/releases", {"platform": "windows", "url": "https://x/a.msi", "sha256": "c" * 64, "auto": True, "build": 81}, "admintok")
         self.assertEqual(r["releases"][0]["platform"], "windows")
+        self.assertEqual(r["releases"][0]["build"], 81)
+        self.req("/api/heartbeat", {"id": "300", "adoluna_cmd_n": 0, "adoluna_dev": {"platform": "windows", "ver": "1.5.0", "build": 81}})
+        u = {"url": "https://x/a.msi", "sha256": "c" * 64}
+        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "300", "k": "update", "p": u}, "admintok")[0], 400)
+        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "300", "k": "update", "p": dict(u, build=81)}, "admintok")[0], 400)
+        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "300", "k": "update", "p": dict(u, url="https://x/a.exe", build=82)}, "admintok")[0], 400)
+        self.assertEqual(self.req("/_admin/adoluna-api/dev/cmd", {"id": "300", "k": "update", "p": dict(u, build=82)}, "admintok")[0], 200)
         # b80 staff PIN: admin only, never echoed, delivered as hash
         self.assertEqual(self.req("/_admin/adoluna-api/staff-pin", {"pin": "9999"}, "stafftok")[0], 403)
         self.assertEqual(self.req("/_admin/adoluna-api/staff-pin", {"pin": "99"}, "admintok")[0], 400)

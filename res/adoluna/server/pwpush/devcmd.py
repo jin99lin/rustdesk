@@ -21,7 +21,7 @@ SCHEMA = """
   create index if not exists dev_cmds_peer on dev_cmds(peer_id, id);
   create table if not exists dev_secrets(peer_id text primary key, otp_k text, ts integer);
   create table if not exists releases(platform text primary key, url text, sha256 text, label text, auto integer,
-    ts integer, by text);
+    ts integer, by text, build integer);
   create table if not exists dev_rel(peer_id text, platform text, rel_ts integer, primary key(peer_id, platform));
   create table if not exists staff_pin(id integer primary key check(id=1), v integer not null, payload text not null,
     ts integer, by text);
@@ -73,6 +73,40 @@ def unseal(s):
 
 def init(c):
     c.executescript(SCHEMA)
+    cols = [r[1] for r in c.execute("pragma table_info(releases)")]
+    if "build" not in cols:  # b80 migration
+        c.execute("alter table releases add column build integer")
+
+def parse_build(v):
+    """Numeric build number (b80 = 80) or None. Updates compare this, never the version string."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v > 0 else None
+    s = str(v or "").strip().lower()
+    if s.startswith("b"):
+        s = s[1:]
+    return int(s) if s.isdigit() and int(s) > 0 else None
+
+def device_build(info):
+    return parse_build(info.get("build")) if isinstance(info, dict) else None
+
+def dev_info_of(c, dev):
+    r = c.execute("select info from dev_info where peer_id=?", (dev,)).fetchone()
+    try:
+        return json.loads(r[0]) if r else {}
+    except Exception:
+        return {}
+
+def update_error(p, plat):
+    """Extra checks for `update`: numeric build required; Windows must get the .msi."""
+    b = parse_build(p.get("build"))
+    if b is None:
+        return "build number (e.g. 80) required"
+    p["build"] = b
+    if plat == "windows" and not str(p.get("url", "")).split("?", 1)[0].split("#", 1)[0].lower().endswith(".msi"):
+        return "Windows update needs the .msi package"
+    return None
 
 def msg(dev, n, k, p, e):
     return f"adoluna-cmd-v1\n{dev}\n{n}\n{k}\n{p}\n{e}"
@@ -85,7 +119,7 @@ def platform_of(info):
     p = str(info.get("platform", "")).lower()
     return {"windows": "windows", "macos": "macos", "mac os": "macos", "linux": "linux"}.get(p, p)
 
-def validate(k, p):
+def validate(k, p, plat=None):
     """Returns error string or None. p is a dict."""
     if k not in KINDS:
         return "unknown command"
@@ -98,6 +132,10 @@ def validate(k, p):
         if not SHA.match(str(p.get("sha256", "")).lower()):
             return "sha256 (64 hex) required"
         p["sha256"] = p["sha256"].lower()
+    if k == "update":
+        e = update_error(p, plat)
+        if e:
+            return e
     if k == "kiosk_lock" and not (p.get("pkg") or p.get("app")):
         return "pkg (Android) or app (Windows AUMID / path) required"
     if k == "policy" and "brightness" in p:
@@ -179,12 +217,15 @@ def on_heartbeat(c, key, q, now=None):
     # auto-update release policy (once per device per release)
     plat = platform_of(info) if isinstance(info, dict) else ""
     if plat:
-        r = c.execute("select url, sha256, label, ts from releases where platform=? and auto=1", (plat,)).fetchone()
-        if r:
+        r = c.execute("select url, sha256, label, ts, build from releases where platform=? and auto=1", (plat,)).fetchone()
+        rb = parse_build(r[4]) if r else None
+        if r and rb:  # releases without a build number are never auto-pushed
             seen = c.execute("select rel_ts from dev_rel where peer_id=? and platform=?", (dev, plat)).fetchone()
             if not seen or seen[0] < r[3]:
                 c.execute("insert or replace into dev_rel(peer_id,platform,rel_ts) values(?,?,?)", (dev, plat, r[3]))
-                queue(c, dev, "update", {"url": r[0], "sha256": r[1], "label": r[2] or "", "auto": True}, "release", now)
+                db = device_build(info)
+                if db is None or rb > db:  # compare build numbers only
+                    queue(c, dev, "update", {"url": r[0], "sha256": r[1], "label": r[2] or "", "build": rb, "auto": True}, "release", now)
     # b80 staff PIN: every device that talks to us gets the current PIN hash once per PIN version
     pin = c.execute("select v, payload from staff_pin where id=1").fetchone()
     if pin:
@@ -270,10 +311,13 @@ def detail(c, dev):
     has_otp = bool(c.execute("select 1 from dev_secrets where peer_id=?", (dev,)).fetchone())
     return {"id": dev, "info": json.loads(r[0]) if r else None, "ts": r[1] if r else None, "cmds": cmds, "otp": has_otp}
 
-def set_release(c, platform, url, sha, label, auto, by):
-    c.execute("insert or replace into releases(platform,url,sha256,label,auto,ts,by) values(?,?,?,?,?,?,?)",
-              (platform, url, sha, label, 1 if auto else 0, int(time.time()), by))
+def set_release(c, platform, url, sha, label, auto, by, build):
+    b = parse_build(build)
+    if b is None:
+        raise ValueError("build number required")
+    c.execute("insert or replace into releases(platform,url,sha256,label,auto,ts,by,build) values(?,?,?,?,?,?,?,?)",
+              (platform, url, sha, label, 1 if auto else 0, int(time.time()), by, b))
 
 def releases(c):
-    return [dict(zip(("platform", "url", "sha256", "label", "auto", "ts", "by"), r))
-            for r in c.execute("select platform,url,sha256,label,auto,ts,by from releases")]
+    return [dict(zip(("platform", "url", "sha256", "label", "auto", "ts", "by", "build"), r))
+            for r in c.execute("select platform,url,sha256,label,auto,ts,by,build from releases")]

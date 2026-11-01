@@ -585,11 +585,12 @@ class H(BaseHTTPRequestHandler):
                 plat = str(q.get("platform", ""))
                 if plat not in ("windows", "macos", "android", "linux"):
                     return self.send(400, b'{"error":"platform"}')
-                err = D.validate("update", {"url": q.get("url", ""), "sha256": q.get("sha256", "")})
+                rp = {"url": q.get("url", ""), "sha256": q.get("sha256", ""), "build": q.get("build")}
+                err = D.validate("update", rp, plat)
                 if err:
                     return self.send(400, json.dumps({"error": err}).encode())
                 with acl() as c:
-                    D.set_release(c, plat, q["url"], str(q["sha256"]).lower(), str(q.get("label", ""))[:80], bool(q.get("auto")), by)
+                    D.set_release(c, plat, q["url"], str(q["sha256"]).lower(), str(q.get("label", ""))[:80], bool(q.get("auto")), by, rp["build"])
                 sys.stderr.write("release %s auto=%s by %s\n" % (plat, bool(q.get("auto")), by))
             with acl() as c:
                 return self.send(200, json.dumps({"releases": D.releases(c)}).encode())
@@ -630,7 +631,12 @@ class H(BaseHTTPRequestHandler):
                     n = D.new_otp_secret(c, dev, by)
                     sys.stderr.write("dev-cmd %s otp_secret n=%s by %s\n" % (dev, n, by))
                     return self.send(200, json.dumps({"n": n}).encode())
-                err = D.validate(k, p) or D.capability_error(c, dev, k)
+                plat = D.platform_of(D.dev_info_of(c, dev)) if k == "update" else None
+                err = D.validate(k, p, plat) or D.capability_error(c, dev, k)
+                if not err and k == "update":
+                    db = D.device_build(D.dev_info_of(c, dev))
+                    if db is not None and p["build"] <= db:
+                        err = "device is already on b%d" % db
                 if err:
                     return self.send(400, json.dumps({"error": err}).encode())
                 n = D.queue(c, dev, k, p, by)
