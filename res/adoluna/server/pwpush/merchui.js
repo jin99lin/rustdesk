@@ -34,12 +34,12 @@ const posNames=m=>m.access.map(a=>a.name);
 const isRoot=()=>/^#\/?$/.test(location.hash||"#/");
 const SK="adoluna_adm";
 const R=()=>{const h=location.hash||"",m=h.match(/^#\/\?(?:.*&)?adm=([\w-]+)/);
- if(m){const id=(h.match(/[?&]id=(\d+)/)||[])[1];const r={p:m[1],id:id?Number(id):null};try{sessionStorage.setItem(SK,JSON.stringify(r))}catch(e){}history.replaceState({adm:r},"",location.pathname+location.search+"#/");return r}
+ if(m){const id=(h.match(/[?&]id=(\d+)/)||[])[1];const r={p:m[1],id:id?Number(id):null};try{sessionStorage.setItem(SK,JSON.stringify(r))}catch(e){}setTimeout(()=>{if(/[?&]adm=/.test(location.hash||""))history.replaceState(Object.assign({},history.state||{},{adm:r,current:"/"}),"",location.pathname+location.search+"#/")},400);return r}
  if(!isRoot())return null;const st=history.state&&history.state.adm;if(st)return st;
  try{return JSON.parse(sessionStorage.getItem(SK)||"null")}catch(e){return null}};
 const go=(p,id)=>{const r={p:p,id:id!=null?Number(id):null};try{sessionStorage.setItem(SK,JSON.stringify(r))}catch(e){}
- const u=location.pathname+location.search+"#/";if(isRoot())history.pushState({adm:r},"",u);else location.hash="#/";
- setTimeout(()=>{if(isRoot()&&!(history.state&&history.state.adm))history.replaceState({adm:r},"",u);window.dispatchEvent(new Event("adoluna-adm"))},0)};
+ const u=location.pathname+location.search+"#/";if(isRoot())history.pushState(Object.assign({},history.state||{},{adm:r}),"",u);else location.hash="#/";
+ setTimeout(()=>{if(isRoot()&&!(history.state&&history.state.adm))history.replaceState(Object.assign({},history.state||{},{adm:r}),"",u);window.dispatchEvent(new Event("adoluna-adm"))},0)};
 window.addEventListener("popstate",()=>{const st=history.state&&history.state.adm;if(st)try{sessionStorage.setItem(SK,JSON.stringify(st))}catch(e){}setTimeout(()=>window.dispatchEvent(new Event("adoluna-adm")),30)});
 const _ADMS=()=>{const r=R();document.documentElement.dataset.adm=r?r.p:"";return r};
 /* ---------- modal ---------- */
