@@ -359,4 +359,6 @@ function relabel(){if(!EN())return;document.querySelectorAll(".el-menu span,.el-
 let t=0,curLang=LG();function langCheck(){const l=LG();if(l===curLang)return;curLang=l;["adp-forgot","adp-ur","adp-menu2"].forEach(i=>{const x=document.getElementById(i);if(x)x.remove()});const a=document.getElementById("adp-menu");if(a)a.remove();const d=document.getElementById("adp-d");if(d)d.remove();const o=document.getElementById("adp");if(o)o.remove()}
 new MutationObserver(()=>{clearTimeout(t);t=setTimeout(()=>{langCheck();menu();mount();relabel();autoFilter();tables();loginLink();mustCheck();userReset()},60)}).observe(document.documentElement,{childList:true,subtree:true});
 window.addEventListener("hashchange",()=>setTimeout(mount,100));window.addEventListener("popstate",()=>setTimeout(mount,100));
+/* b80: shared with the merchant drawer (merchui.js) so both show the same 设备管理 */
+window.ADP_devLoad=devLoad;
 })();

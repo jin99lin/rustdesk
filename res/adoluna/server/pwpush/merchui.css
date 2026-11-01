@@ -143,3 +143,16 @@ html.adm-col #adm-nav .adm-badge{position:absolute;left:34px;top:9px;min-width:0
 #adm-dr .adm-grp{border:1px solid #EEF0F2;border-radius:6px;margin:6px 0}#adm-dr .adm-grp summary{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;list-style:none}
 #adm-dr .adm-grp summary::-webkit-details-marker{display:none}#adm-dr .adm-grp summary:before{content:"▸";color:#9CA3AF;margin-right:2px}#adm-dr .adm-grp[open] summary:before{content:"▾"}#adm-dr .adm-grp summary>span:first-child{flex:1}
 #adm-dr .adm-gm{padding:0 10px 10px 24px;display:flex;flex-wrap:wrap;gap:4px}
+
+/* b80: 设备管理 in the merchant drawer (rules copied from peerui.css) */
+#adm-dr .adp-devw .btn{border:1px solid var(--bd,#DCDFE4);background:#fff;color:#374151;border-radius:6px;height:32px;padding:0 14px;cursor:pointer;font-size:14px;font-family:inherit}
+#adm-dr .adp-devw .f{display:grid;grid-template-columns:96px 1fr;gap:12px 14px;align-items:center}
+#adm-dr .adp-devw .f label{color:var(--t3);text-align:right}
+#adm-dr .adp-devw .f input,#adm-dr .adp-devw .f select{width:100%}
+#adm-dr .adp-devw .f span{word-break:break-all}
+#adm-dr .adp-devw .pc{border:1px solid var(--bl);border-radius:8px;padding:14px 16px;line-height:1.9;background:#FAFAFB}
+#adm-dr .adp-devw .f .adp-ck input{width:auto;height:auto}
+#adm-dr .adp-devw .bar .btn{white-space:nowrap;flex:none}
+#adm-dr .adp-devw .adp-pwh .adp-hint{font-size:13px;line-height:1.6;max-width:900px}
+#adm-dr .adp-devw .btn.sm{height:24px;padding:0 8px;font-size:12px;border-radius:4px}
+#adm-dr .adp-devw .adp-at td,#adm-dr .adp-devw .adp-at th{padding:4px 6px;font-size:12px}
