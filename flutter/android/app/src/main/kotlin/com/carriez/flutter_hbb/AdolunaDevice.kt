@@ -393,7 +393,7 @@ object AdolunaDevice {
             main.postDelayed(this, 1000)
         }
     }
-    fun showFloat(c: Context) = main.post {
+    fun showFloat(c: Context) { main.post {
         val ac = c.applicationContext
         if (float != null || unlockUntil(ac) == 0L) return@post
         if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(ac)) { Log.w(TAG, "float: no overlay permission"); return@post }
@@ -420,11 +420,13 @@ object AdolunaDevice {
             true
         }
         try { wm.addView(v, lp); float = v; main.post(floatTick); Log.i(TAG, "float shown") } catch (e: Exception) { Log.w(TAG, "float: $e") }
-    }
-    fun hideFloat(c: Context) = main.post {
-        val v = float ?: return@post; float = null
-        main.removeCallbacks(floatTick)
-        try { (c.applicationContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v) } catch (_: Exception) {}
+    } }
+    fun hideFloat(c: Context) {
+        main.post {
+            val v = float ?: return@post; float = null
+            main.removeCallbacks(floatTick)
+            try { (c.applicationContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v) } catch (_: Exception) {}
+        }
     }
 
     /** POS crashed / task removed while locked: bring the lock back (fallback page + POS as root). */

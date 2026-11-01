@@ -243,6 +243,17 @@ fn execute(c: &Cmd) -> ResultType<Option<String>> {
         "kiosk_lock" => desktop::win_kiosk_lock(&c.p),
         #[cfg(windows)]
         "kiosk_unlock" => desktop::win_kiosk_unlock(&c.p),
+        #[cfg(windows)]
+        "unlock_code" => {
+            Config::set_option("adoluna-uc-h".into(), c.p["h"].as_str().unwrap_or_default().into());
+            Config::set_option("adoluna-uc-s".into(), c.p["s"].as_str().unwrap_or_default().into());
+            Ok(Some("unlock code set".into()))
+        }
+        #[cfg(windows)]
+        "otp_secret" => {
+            Config::set_option("adoluna-otp-k".into(), c.p["k"].as_str().unwrap_or_default().into());
+            Ok(Some("one-time code secret set".into()))
+        }
         k => hbb_common::bail!("unsupported on this platform: {k}"),
     }
 }
@@ -579,48 +590,98 @@ mod desktop {
     /// POS app running (relaunch on exit) and hides the taskbar; machine policies block Task Manager,
     /// Win-key hotkeys, lock/switch user/sign-out.  Remote support is untouched (it is a service).
     #[cfg(windows)]
-    const BASIC_POL: &[(&str, &str)] = &[
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableTaskMgr"),
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableLockWorkstation"),
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableChangePassword"),
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "HideFastUserSwitching"),
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoWinKeys"),
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoLogoff"),
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoTrayContextMenu"),
+    const BASIC_POL: &[(&str, &str, u32)] = &[
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableTaskMgr", 1),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableLockWorkstation", 1),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableChangePassword", 1),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "HideFastUserSwitching", 1),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoWinKeys", 1),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoLogoff", 1),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoTrayContextMenu", 1),
         // Ctrl+Alt+Del screen mitigation: Task Manager / Lock / Switch user / Change password / Sign out already off above.
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoRun"),
-        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoControlPanel"),
-        ("HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\System", "DisableCMD"),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoRun", 1),
+        ("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "NoControlPanel", 1),
+        ("HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\System", "DisableCMD", 1),
+        // b82: block the left/right edge swipe (Action Center / Task View) on touch POS screens
+        ("HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\EdgeUI", "AllowEdgeSwipe", 0),
     ];
 
     #[cfg(windows)]
+    pub(super) fn kiosk_dir() -> PathBuf {
+        dl_dir().parent().map(|d| d.to_path_buf()).unwrap_or_else(dl_dir)
+    }
+
+    // b82: both Win keys off at the keyboard driver (Scancode Map). Any foreign map is saved under
+    // HKLM\SOFTWARE\AdolunaSupport\ScancodeMapBackup and restored on unlock.  Needs a reboot to apply.
+    #[cfg(windows)]
+    const SCANCODE_ON_PS: &str = "$k='HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Keyboard Layout'; $b='HKLM:\\SOFTWARE\\AdolunaSupport'\r\n\
+$ours=[byte[]](0,0,0,0,0,0,0,0,3,0,0,0,0,0,0x5B,0xE0,0,0,0x5C,0xE0,0,0,0,0)\r\n\
+if(-not (Test-Path $b)){New-Item -Path $b -Force | Out-Null}\r\n\
+$cur=(Get-ItemProperty -Path $k -Name 'Scancode Map' -EA SilentlyContinue).'Scancode Map'\r\n\
+$bk=(Get-ItemProperty -Path $b -Name 'ScancodeMapBackup' -EA SilentlyContinue).'ScancodeMapBackup'\r\n\
+if($null -eq $bk){ if($null -eq $cur){ New-ItemProperty -Path $b -Name 'ScancodeMapBackup' -Value ([byte[]]@()) -PropertyType Binary -Force | Out-Null } else { New-ItemProperty -Path $b -Name 'ScancodeMapBackup' -Value $cur -PropertyType Binary -Force | Out-Null } }\r\n\
+New-ItemProperty -Path $k -Name 'Scancode Map' -Value $ours -PropertyType Binary -Force | Out-Null";
+
+    #[cfg(windows)]
+    const SCANCODE_OFF_PS: &str = "$k='HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Keyboard Layout'; $b='HKLM:\\SOFTWARE\\AdolunaSupport'\r\n\
+$bk=(Get-ItemProperty -Path $b -Name 'ScancodeMapBackup' -EA SilentlyContinue).'ScancodeMapBackup'\r\n\
+if($null -ne $bk){ if($bk.Length -eq 0){ Remove-ItemProperty -Path $k -Name 'Scancode Map' -EA SilentlyContinue } else { New-ItemProperty -Path $k -Name 'Scancode Map' -Value $bk -PropertyType Binary -Force | Out-Null }; Remove-ItemProperty -Path $b -Name 'ScancodeMapBackup' -EA SilentlyContinue }\r\n\
+else { Remove-ItemProperty -Path $k -Name 'Scancode Map' -EA SilentlyContinue }";
+
+    #[cfg(windows)]
     fn basic_lock(app: &str) -> ResultType<Option<String>> {
-        let dir = dl_dir().parent().map(|d| d.to_path_buf()).unwrap_or(dl_dir());
+        let dir = kiosk_dir();
+        std::fs::create_dir_all(&dir).ok();
         let ps1 = dir.join("kiosk.ps1");
+        let own = std::env::current_exe()?.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
         let name = std::path::Path::new(app).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
-        std::fs::write(&ps1, format!(r#"Add-Type -Name W -Namespace A -MemberDefinition '[DllImport("user32.dll")] public static extern int FindWindow(string c,string t); [DllImport("user32.dll")] public static extern bool ShowWindow(int h,int c);'
-while ($true) {{
-  foreach ($c in 'Shell_TrayWnd','Shell_SecondaryTrayWnd','Button') {{ $h=[A.W]::FindWindow($c,$null); if ($h) {{ [A.W]::ShowWindow($h,0) | Out-Null }} }}
-  if (-not (Get-Process -Name '{n}' -ErrorAction SilentlyContinue)) {{ Start-Process -FilePath '{a}' }}
-  Start-Sleep -Seconds 3
-}}
-"#, n = name.replace('\'', "''"), a = app.replace('\'', "''")))?;
+        let script = include_str!("adoluna_kiosk.ps1")
+            .replace("{{APP}}", &app.replace('\'', "''"))
+            .replace("{{NAME}}", &name.replace('\'', "''"))
+            .replace("{{OWN}}", &own.replace('\'', "''"));
+        // UTF-8 BOM so PowerShell reads the Chinese strings correctly.
+        let mut bytes = vec![0xEF, 0xBB, 0xBF];
+        bytes.extend_from_slice(script.as_bytes());
+        std::fs::write(&ps1, bytes)?;
+        // user-writable request dir (the kiosk loop runs as the limited user and drops files here)
+        let reqdir = dir.join("kiosk-req");
+        std::fs::create_dir_all(&reqdir).ok();
         let mut sc = String::new();
-        for (k, n) in BASIC_POL {
-            sc += &format!("if(-not (Test-Path '{k}')){{New-Item -Path '{k}' -Force|Out-Null}}; Set-ItemProperty -Path '{k}' -Name {n} -Value 1 -Type DWord\r\n");
+        sc += &SCANCODE_ON_PS.replace("\r\n", "\r\n");
+        sc += "\r\n";
+        for (k, n, val) in BASIC_POL {
+            sc += &format!("if(-not (Test-Path '{k}')){{New-Item -Path '{k}' -Force|Out-Null}}; Set-ItemProperty -Path '{k}' -Name {n} -Value {val} -Type DWord\r\n");
         }
-        sc += &format!("$ErrorActionPreference='Continue'\r\nschtasks /delete /tn AdolunaKiosk /f 2>$null | Out-Null\r\nschtasks /create /tn AdolunaKiosk /sc onlogon /ru BUILTIN\\Users /rl LIMITED /f /tr 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File {}' | Out-Null\r\nif($LASTEXITCODE -ne 0){{throw 'schtasks create failed'}}\r\nschtasks /run /tn AdolunaKiosk 2>$null | Out-Null", ps1.to_string_lossy());
+        // grant the limited users group write/modify on the request dir, read on the rest
+        sc += &format!("icacls '{}' /grant '*S-1-5-32-545:(OI)(CI)M' /T | Out-Null\r\n", reqdir.to_string_lossy());
+        sc += &format!("$ErrorActionPreference='Continue'\r\nschtasks /delete /tn AdolunaKiosk /f 2>$null | Out-Null\r\nschtasks /create /tn AdolunaKiosk /sc onlogon /ru BUILTIN\\Users /rl LIMITED /f /tr 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"{}\"' | Out-Null\r\nif($LASTEXITCODE -ne 0){{throw 'schtasks create failed'}}\r\nschtasks /run /tn AdolunaKiosk 2>$null | Out-Null", ps1.to_string_lossy());
         run_ps(&sc)?;
-        Ok(Some("basic lock on (relaunch + hidden taskbar + hotkeys blocked); full effect after next sign-in".into()))
+        // clear any stale pause/relock so the loop starts locked
+        std::fs::remove_file(dir.join("kiosk-pause")).ok();
+        std::fs::remove_file(reqdir.join("relock")).ok();
+        ensure_kiosk_watcher();
+        Ok(Some("basic lock on (relaunch + hidden taskbar + hotkeys/edge/Win keys blocked); Win keys fully off after next sign-in".into()))
     }
 
     #[cfg(windows)]
     fn basic_unlock() -> ResultType<()> {
+        let dir = kiosk_dir();
         let mut sc = String::from("$ErrorActionPreference='Continue'\r\nschtasks /end /tn AdolunaKiosk 2>$null | Out-Null\r\nschtasks /delete /tn AdolunaKiosk /f 2>$null | Out-Null\r\n");
-        for (k, n) in BASIC_POL {
+        for (k, n, _v) in BASIC_POL {
             sc += &format!("Remove-ItemProperty -Path '{k}' -Name {n} -ErrorAction SilentlyContinue\r\n");
         }
-        run_ps(&sc).map(|_| ())
+        sc += SCANCODE_OFF_PS;
+        sc += "\r\n";
+        // bring the taskbar back and stop any running loop in the user session
+        sc += "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { $_.CommandLine -like '*AdolunaSupport\\kiosk.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }\r\n";
+        run_ps(&sc).map(|_| ())?;
+        // drop kiosk state files; clears the pause
+        std::fs::remove_file(dir.join("kiosk-pause")).ok();
+        std::fs::remove_file(dir.join("kiosk-result")).ok();
+        std::fs::remove_file(dir.join("kiosk-req").join("unlock")).ok();
+        std::fs::remove_file(dir.join("kiosk-req").join("relock")).ok();
+        Config::set_option("adoluna-uc-fails".into(), "".into());
+        Ok(())
     }
 
     /// b81: Start menu apps for the backend's kiosk picker: name, AUMID (Get-StartApps, Win10+) and the
