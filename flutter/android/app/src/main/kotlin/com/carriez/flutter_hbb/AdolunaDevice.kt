@@ -388,8 +388,7 @@ object AdolunaDevice {
             val v = float ?: return
             val left = (prefs(v.context).getLong("unlock_until", 0) - System.currentTimeMillis()) / 1000
             if (left <= 0) { hideFloat(v.context); return }
-            val zh = v.resources.configuration.locale.language == "zh"
-            v.text = "%s %02d:%02d · %s".format(if (zh) "剩余" else "Left", left / 60, left % 60, if (zh) "锁定" else "Lock")
+            v.text = "剩余 %02d:%02d · 锁定".format(left / 60, left % 60)  // b82r2: Chinese consistently
             main.postDelayed(this, 1000)
         }
     }
@@ -405,7 +404,7 @@ object AdolunaDevice {
         val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
         val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
-        lp.gravity = Gravity.TOP or Gravity.START; lp.x = (8 * d).toInt(); lp.y = (40 * d).toInt()
+        lp.gravity = Gravity.TOP or Gravity.LEFT; lp.x = (8 * d).toInt(); lp.y = (40 * d).toInt()  // b82r2: pin top-left
         var dx = 0f; var dy = 0f; var sx = 0; var sy = 0; var moved = false
         v.setOnTouchListener { _, e ->
             when (e.action) {

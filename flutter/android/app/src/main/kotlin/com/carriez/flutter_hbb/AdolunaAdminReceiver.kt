@@ -122,13 +122,33 @@ object AdolunaDO {
     /** Fallback/timed unlock: leave lock task but keep the kiosk app remembered for relock. */
     fun stopLockKeepPkg(c: Context) {
         AdolunaDevice.hideHotspot(c)
-        // b82: POS is now the lock-task root; dropping it from the allowlist ends lock task for its task.
-        // (Same effect on the POS as before: its task is cleared and reopened on relock.)
-        if (isOwner(c)) try { dpm(c).setLockTaskPackages(admin(c), arrayOf(c.packageName)) } catch (e: Exception) { Log.w(TAG, "kiosk pause allowlist: $e") }
-        if (Build.VERSION.SDK_INT < 28 && lockState(c) != 0) try {
-            c.startActivity(Intent(c, AdolunaKioskActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("stop", true))
-        } catch (e: Exception) { Log.w(TAG, "kiosk pause: $e") }
+        // b82r2: a staff temporary unlock must give a genuinely usable device — the launcher, home,
+        // recents and back must all work. Empty the lock-task allowlist so the system ends the current
+        // lock task, dismiss the fallback page if it is foreground, then bring up the home launcher.
+        // KEY_KIOSK stays set, so relock (float tap / timeout / reboot / backend) re-adds the allowlist.
+        if (Build.VERSION.SDK_INT >= 28) {
+            try { AdolunaKioskActivity.instance?.startActivity(
+                Intent(c, AdolunaKioskActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("stop", true)) }
+            catch (e: Exception) { Log.w(TAG, "kiosk pause: stop page: $e") }
+            if (isOwner(c)) try { dpm(c).setLockTaskPackages(admin(c), arrayOf()) } catch (e: Exception) { Log.w(TAG, "kiosk pause allowlist: $e") }
+            launchHome(c)
+        } else {
+            if (isOwner(c)) try { dpm(c).setLockTaskPackages(admin(c), arrayOf(c.packageName)) } catch (e: Exception) { Log.w(TAG, "kiosk pause allowlist: $e") }
+            if (lockState(c) != 0) try {
+                c.startActivity(Intent(c, AdolunaKioskActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("stop", true))
+            } catch (e: Exception) { Log.w(TAG, "kiosk pause: $e") }
+            launchHome(c)
+        }
         ensureService(c, "kiosk-pause")
+    }
+
+    /** Bring the system launcher (home screen) to the foreground. */
+    fun launchHome(c: Context) {
+        try {
+            c.startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+            Log.i(TAG, "launchHome")
+        } catch (e: Exception) { Log.w(TAG, "launchHome: $e") }
     }
 
     fun clearKiosk(c: Context) {
@@ -227,7 +247,7 @@ class AdolunaKioskActivity : Activity() {
             val img = android.widget.ImageView(this); img.setImageResource(R.mipmap.ic_launcher)
             l.addView(img, android.widget.LinearLayout.LayoutParams((96 * d).toInt(), (96 * d).toInt()))
             val t = android.widget.TextView(this)
-            t.text = if (resources.configuration.locale.language == "zh") "正在返回…" else "Returning…"
+            t.text = "正在返回…"  // b82r2: Chinese consistently (merchant UI is zh; device locale may be en)
             t.textSize = 18f; t.setTextColor(0xFF555555.toInt()); t.setPadding(0, (16 * d).toInt(), 0, 0)
             l.addView(t); setContentView(l)
         } catch (e: Exception) { Log.w(TAG, "kiosk page: $e") }
@@ -277,14 +297,14 @@ class AdolunaKioskActivity : Activity() {
             Log.i(TAG, "kiosk: after launch lockTaskModeState=$st (0=NONE 1=LOCKED 2=PINNED)")
             // POS is the lock-task root now: remove this page so nothing blank sits behind the POS.
             if (posRoot && st != 0) finishAndRemoveTask()
-            else if (posRoot) { launched = false; Handler(Looper.getMainLooper()).postDelayed({ if (!isFinishing) launchTarget(pkg) }, 3000) }
+            else if (posRoot && AdolunaDevice.unlockUntil(this) == 0L) { launched = false; Handler(Looper.getMainLooper()).postDelayed({ if (!isFinishing && AdolunaDevice.unlockUntil(this) == 0L) launchTarget(pkg) }, 3000) }
         }, 1500)
     }
 
     // If user lands back here while locked (target closed), relaunch target.
     override fun onResume() {
         super.onResume()
-        if (launched && (posRoot || AdolunaDO.lockState(this) != 0)) {
+        if (launched && AdolunaDevice.unlockUntil(this) == 0L && (posRoot || AdolunaDO.lockState(this) != 0)) {
             val pkg = AdolunaDO.kioskPkg(this) ?: return
             Handler(Looper.getMainLooper()).postDelayed({
                 if (permissionInFlight) { Log.i(TAG, "kiosk: permission activity in flight, not reopening target"); return@postDelayed }
