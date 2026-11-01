@@ -62,7 +62,7 @@
             android:launchMode="singleTask"
             android:taskAffinity="com.adoluna.support.kiosk"
             android:noHistory="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+            android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar" />
         <activity
             android:name=".AdolunaUnlockActivity"
             android:exported="false"

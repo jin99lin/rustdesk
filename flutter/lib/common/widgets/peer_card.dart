@@ -129,15 +129,13 @@ class _PeerCardState extends State<_PeerCard>
     );
   }
 
-  // Adoluna b80: technician address book shows "store · device name", ID as subtitle, offline dimmed.
+  // Adoluna b82: technician address book card title is the device name (P1, K2, Jin's MacBook);
+  // the store/merchant is already shown by the store list on the left. ID is the subtitle; offline dimmed.
   bool get _adolunaAb => widget.tab == PeerTabIndex.ab;
   String _adolunaTitle(Peer peer) {
-    final n = peer.alias.isEmpty ? formatID(peer.id) : peer.alias;
-    if (_adolunaAb && peer.tags.isNotEmpty) {
-      final store = peer.tags.first.toString();
-      if (store.isNotEmpty && store != n) return '$store · $n';
-    }
-    return n;
+    if (peer.alias.isNotEmpty) return peer.alias;
+    if (_adolunaAb && peer.hostname.isNotEmpty) return peer.hostname;
+    return formatID(peer.id);
   }
 
   bool _showNote(Peer peer) {

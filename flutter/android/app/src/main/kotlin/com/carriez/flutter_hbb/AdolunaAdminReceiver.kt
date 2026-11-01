@@ -75,7 +75,8 @@ object AdolunaDO {
         val d = dpm(c); val a = admin(c)
         try { d.setLockTaskPackages(a, arrayOf(c.packageName, pkg, "com.android.systemui")) } catch (e: Exception) { Log.e(TAG, "kiosk: setLockTaskPackages failed: $e"); return false }
         if (Build.VERSION.SDK_INT >= 28) try {
-            d.setLockTaskFeatures(a, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
+            // b82: status bar shows time / network / battery; notifications, home, recents stay blocked
+            d.setLockTaskFeatures(a, DevicePolicyManager.LOCK_TASK_FEATURE_SYSTEM_INFO)
         } catch (e: Exception) { Log.w(TAG, "kiosk: setLockTaskFeatures: $e") }
         val pkgs = try { d.getLockTaskPackages(a).joinToString(",") } catch (e: Exception) { "err $e" }
         Log.i(TAG, "kiosk: lockTaskPackages=[$pkgs] permitted(self)=${d.isLockTaskPermitted(c.packageName)} permitted($pkg)=${d.isLockTaskPermitted(pkg)}")
@@ -121,7 +122,10 @@ object AdolunaDO {
     /** Fallback/timed unlock: leave lock task but keep the kiosk app remembered for relock. */
     fun stopLockKeepPkg(c: Context) {
         AdolunaDevice.hideHotspot(c)
-        if (lockState(c) != 0) try {
+        // b82: POS is now the lock-task root; dropping it from the allowlist ends lock task for its task.
+        // (Same effect on the POS as before: its task is cleared and reopened on relock.)
+        if (isOwner(c)) try { dpm(c).setLockTaskPackages(admin(c), arrayOf(c.packageName)) } catch (e: Exception) { Log.w(TAG, "kiosk pause allowlist: $e") }
+        if (Build.VERSION.SDK_INT < 28 && lockState(c) != 0) try {
             c.startActivity(Intent(c, AdolunaKioskActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("stop", true))
         } catch (e: Exception) { Log.w(TAG, "kiosk pause: $e") }
         ensureService(c, "kiosk-pause")
@@ -130,7 +134,8 @@ object AdolunaDO {
     fun clearKiosk(c: Context) {
         AdolunaDevice.hideHotspot(c)
         c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_KIOSK).apply()
-        if (lockState(c) != 0) try {
+        // b82: on Android 9+ the empty allowlist below ends lock task (POS is the root, not our page)
+        if (Build.VERSION.SDK_INT < 28 && lockState(c) != 0) try {
             c.startActivity(Intent(c, AdolunaKioskActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("stop", true))
         } catch (e: Exception) { Log.w(TAG, "kiosk clear: stop activity: $e") }
@@ -202,17 +207,36 @@ class AdolunaInstallResult : BroadcastReceiver() {
     }
 }
 
-/** Test-only, invisible. Enters lock task itself, then launches the allowlisted target which joins lock task mode.
- *  Stays alive (behind target) so the lock task keeps a root; "stop" extra calls stopLockTask(). */
+/** b82: fallback root page (Adoluna logo + 「正在返回…」). On Android 9+ the POS itself is started as the
+ *  lock-task root (no blank page behind it, Back on its root is blocked by the system); this page only
+ *  appears for a moment while (re)launching. Android < 9: old behaviour (this activity holds lock task).
+ *  "stop" extra calls stopLockTask(). */
 class AdolunaKioskActivity : Activity() {
     companion object {
         @Volatile var instance: AdolunaKioskActivity? = null
         @Volatile var permissionInFlight = false
     }
     private var launched = false
-    override fun onCreate(b: Bundle?) { super.onCreate(b); instance = this; handle(intent) }
+    private val posRoot get() = Build.VERSION.SDK_INT >= 28
+    override fun onCreate(b: Bundle?) {
+        super.onCreate(b); instance = this
+        try {
+            val d = resources.displayMetrics.density
+            val l = android.widget.LinearLayout(this); l.orientation = android.widget.LinearLayout.VERTICAL
+            l.gravity = android.view.Gravity.CENTER; l.setBackgroundColor(android.graphics.Color.WHITE)
+            val img = android.widget.ImageView(this); img.setImageResource(R.mipmap.ic_launcher)
+            l.addView(img, android.widget.LinearLayout.LayoutParams((96 * d).toInt(), (96 * d).toInt()))
+            val t = android.widget.TextView(this)
+            t.text = if (resources.configuration.locale.language == "zh") "正在返回…" else "Returning…"
+            t.textSize = 18f; t.setTextColor(0xFF555555.toInt()); t.setPadding(0, (16 * d).toInt(), 0, 0)
+            l.addView(t); setContentView(l)
+        } catch (e: Exception) { Log.w(TAG, "kiosk page: $e") }
+        handle(intent)
+    }
     override fun onDestroy() { if (instance === this) instance = null; Log.i(TAG, "kiosk activity destroyed"); super.onDestroy() }
     override fun onNewIntent(i: Intent) { super.onNewIntent(i); setIntent(i); launched = false; handle(i) }
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() { /* never leave the fallback page by Back */ }
 
     private fun handle(i: Intent) {
         if (i.getBooleanExtra("stop", false)) {
@@ -228,10 +252,12 @@ class AdolunaKioskActivity : Activity() {
 
     private fun waitReadyThenLock(pkg: String, n: Int) {
         if (!MainService.isReady && n < 16) { Handler(Looper.getMainLooper()).postDelayed({ waitReadyThenLock(pkg, n + 1) }, 500); return }
-        Log.i(TAG, "kiosk: capture isReady=${MainService.isReady} after ${n * 500}ms, locking")
-        try { startLockTask(); Log.i(TAG, "kiosk: startLockTask ok, state=${AdolunaDO.lockState(this)}") }
-        catch (e: Exception) { Log.e(TAG, "kiosk: startLockTask failed: $e") }
-        Handler(Looper.getMainLooper()).postDelayed({ launchTarget(pkg) }, 400)
+        Log.i(TAG, "kiosk: capture isReady=${MainService.isReady} after ${n * 500}ms, locking (posRoot=$posRoot)")
+        if (!posRoot) {
+            try { startLockTask(); Log.i(TAG, "kiosk: startLockTask ok, state=${AdolunaDO.lockState(this)}") }
+            catch (e: Exception) { Log.e(TAG, "kiosk: startLockTask failed: $e") }
+            Handler(Looper.getMainLooper()).postDelayed({ launchTarget(pkg) }, 400)
+        } else launchTarget(pkg)
         AdolunaDO.ensureService(this, "kiosk-start", 4000)
     }
 
@@ -239,28 +265,32 @@ class AdolunaKioskActivity : Activity() {
         if (launched) return; launched = true
         val t = packageManager.getLaunchIntentForPackage(pkg)
             ?: packageManager.getLeanbackLaunchIntentForPackage(pkg)
-        if (t == null) { Log.w(TAG, "kiosk: no launcher activity for $pkg (lock stays on our blank screen)"); return }
-        t.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (t == null) { Log.w(TAG, "kiosk: no launcher activity for $pkg (stays on the fallback page)"); return }
+        t.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or (if (posRoot) Intent.FLAG_ACTIVITY_CLEAR_TASK else 0))
         try {
             if (Build.VERSION.SDK_INT >= 28) startActivity(t, ActivityOptions.makeBasic().setLockTaskEnabled(true).toBundle())
             else startActivity(t)
             Log.i(TAG, "kiosk launched $pkg")
         } catch (e: Exception) { Log.e(TAG, "kiosk launch failed: $e") }
         Handler(Looper.getMainLooper()).postDelayed({
-            Log.i(TAG, "kiosk: after launch lockTaskModeState=${AdolunaDO.lockState(this)} (0=NONE 1=LOCKED 2=PINNED)")
-        }, 2000)
+            val st = AdolunaDO.lockState(this)
+            Log.i(TAG, "kiosk: after launch lockTaskModeState=$st (0=NONE 1=LOCKED 2=PINNED)")
+            // POS is the lock-task root now: remove this page so nothing blank sits behind the POS.
+            if (posRoot && st != 0) finishAndRemoveTask()
+            else if (posRoot) { launched = false; Handler(Looper.getMainLooper()).postDelayed({ if (!isFinishing) launchTarget(pkg) }, 3000) }
+        }, 1500)
     }
 
     // If user lands back here while locked (target closed), relaunch target.
     override fun onResume() {
         super.onResume()
-        if (launched && AdolunaDO.lockState(this) != 0) {
+        if (launched && (posRoot || AdolunaDO.lockState(this) != 0)) {
             val pkg = AdolunaDO.kioskPkg(this) ?: return
             Handler(Looper.getMainLooper()).postDelayed({
                 if (permissionInFlight) { Log.i(TAG, "kiosk: permission activity in flight, not reopening target"); return@postDelayed }
                 if (!hasWindowFocus() && instance !== this) return@postDelayed
                 launched = false; launchTarget(pkg)
-            }, 1500)
+            }, 300)
         }
     }
 }

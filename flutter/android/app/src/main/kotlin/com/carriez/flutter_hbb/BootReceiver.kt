@@ -35,7 +35,7 @@ class BootReceiver : BroadcastReceiver() {
             if (isOwner && intent.action != Intent.ACTION_USER_PRESENT) {
                 AdolunaDO.setup(context)
                 // b79: never lock before remote support (capture + server) is ready
-                AdolunaDevice.bootRelock(context)
+                AdolunaDevice.bootRelock(context, reboot = intent.action != Intent.ACTION_MY_PACKAGE_REPLACED)
                 if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) AdolunaDO.ensureService(context, "self-update", 5000)
             }
             // Adoluna: fallback actions may fire repeatedly; only start once per process.

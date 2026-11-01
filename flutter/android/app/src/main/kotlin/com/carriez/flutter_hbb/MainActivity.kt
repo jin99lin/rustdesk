@@ -284,6 +284,14 @@ class MainActivity : FlutterActivity() {
         flutterMethodChannel.setMethodCallHandler { call, result ->
             // make sure result will be invoked, otherwise flutter will await forever
             when (call.method) {
+                // b82: staff temporary unlock state + 「立即锁定」 (no PIN needed to lock)
+                "adoluna_temp_unlock" -> {
+                    result.success(mapOf("until" to AdolunaDevice.unlockUntil(this), "app" to AdolunaDevice.kioskLabel(this)))
+                }
+                "adoluna_relock" -> {
+                    AdolunaDevice.relockNow(this)
+                    result.success(true)
+                }
                 "init_service" -> {
                     Intent(activity, MainService::class.java).also {
                         bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)

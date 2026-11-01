@@ -265,6 +265,8 @@ class MainService : Service() {
         // with the screen off (K2 "rendezvous: Please try later"); show the kiosk unlock hotspot.
         AdolunaDevice.keepAlive(this, true)
         if (AdolunaDO.lockState(this) != 0) AdolunaDevice.showHotspot(this)
+        AdolunaDevice.startWatchdog(this)
+        AdolunaDevice.showFloat(this)
     }
 
     override fun onDestroy() {

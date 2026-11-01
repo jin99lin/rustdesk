@@ -126,6 +126,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   final RxBool _block = false.obs;
   final RxBool _canBeBlocked = false.obs;
   Timer? _videoConnTimer;
+  StreamSubscription<bool>? _staffSub;
 
   _DesktopSettingPageState(SettingsTabKey initialTabkey) {
     var initialIndex = DesktopSettingPage.tabKeys.indexOf(initialTabkey);
@@ -158,6 +159,18 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Adoluna b82: refresh tabs right after the staff PIN / relock, keep the same tab selected.
+    _staffSub = adolunaStaff.listen((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !controller.hasClients) return;
+        final keys = DesktopSettingPage.tabKeys;
+        var i = keys.indexOf(selectedTab.value);
+        if (i < 0) i = keys.length - 1;
+        selectedTab.value = keys[i];
+        controller.jumpToPage(i);
+        setState(() {});
+      });
+    });
     _videoConnTimer =
         periodic_immediate(Duration(milliseconds: 1000), () async {
       if (!mounted) {
@@ -174,6 +187,8 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   @override
   void dispose() {
     _videoConnTimer?.cancel();
+    _staffSub?.cancel();
+    adolunaStaffOff(); // b82: leaving Settings relocks staff mode
     WidgetsBinding.instance.removeObserver(this);
     Get.delete<PageController>(tag: _kSettingPageControllerTag);
     Get.delete<Rx<SettingsTabKey>>(tag: _kSettingPageTabKeyTag);
@@ -279,6 +294,11 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     adolunaStaff.value; // rebuild when staff settings are unlocked
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
+      appBar: adolunaStaff.value
+          ? PreferredSize(
+              preferredSize: const Size.fromHeight(52),
+              child: adolunaStaffBanner())
+          : null,
       body: _buildBlock(
         children: <Widget>[
           SizedBox(

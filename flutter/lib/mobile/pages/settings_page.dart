@@ -67,6 +67,7 @@ KeepScreenOn optionToKeepScreenOn(String value) {
 }
 
 class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
+  StreamSubscription<bool>? _staffSub;
   final _hasIgnoreBattery =
       false; //androidVersion >= 26; // remove because not work on every device
   var _ignoreBatteryOpt = false;
@@ -158,6 +159,10 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    // Adoluna b82: rebuild immediately after the staff PIN / relock.
+    _staffSub = adolunaStaff.listen((_) {
+      if (mounted) setState(() {});
+    });
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -238,6 +243,8 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _staffSub?.cancel();
+    adolunaStaffOff(); // b82: leaving Settings relocks staff mode
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -1067,7 +1074,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         ),
       ],
     );
-    return settings;
+    return Column(children: [adolunaStaffBanner(), Expanded(child: settings)]);
   }
 
   Future<bool> canStartOnBoot() async {

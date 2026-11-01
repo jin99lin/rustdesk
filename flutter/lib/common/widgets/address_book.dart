@@ -184,27 +184,58 @@ class _AddressBookState extends State<AddressBook> {
                   .toList()),
         );
       }
-      return ListView(
-        children: items.map((e) {
-          final selected = cur == e.key;
-          return InkWell(
-            onTap: () => pick(e.key),
-            child: Container(
-              padding: EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-              color: selected
-                  ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
-                  : null,
-              child: Text(e.value,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight:
-                          selected ? FontWeight.bold : FontWeight.normal)),
-            ),
-          );
-        }).toList(),
-      );
+      // b82: group stores under merchant headings ("Merchant · Store"); rows show the store only.
+      Widget row(String key, String label, {double indent = 10}) {
+        final selected = cur == key;
+        return InkWell(
+          onTap: () => pick(key),
+          child: Container(
+            padding: EdgeInsets.fromLTRB(indent, 8, 10, 8),
+            color: selected
+                ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
+                : null,
+            child: Row(children: [
+              Expanded(
+                  child: Text(label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: selected
+                              ? FontWeight.bold
+                              : FontWeight.normal))),
+              if (key.isNotEmpty)
+                Text('${online[key] ?? 0}/${counts[key]}',
+                    style: TextStyle(fontSize: 12, color: Colors.grey)),
+            ]),
+          ),
+        );
+      }
+
+      final groups = <String, List<String>>{};
+      for (final k in stores) {
+        final i = k.indexOf(' · ');
+        final m = i > 0 ? k.substring(0, i) : k;
+        groups.putIfAbsent(m, () => []).add(k);
+      }
+      final ms = groups.keys.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      return ListView(children: [
+        row('', '$allLabel (${peers.length})'),
+        for (final m in ms) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 2),
+            child: Text(m,
+                style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey,
+                    fontWeight: FontWeight.bold)),
+          ),
+          for (final k in groups[m]!)
+            row(k, k.contains(' · ') ? k.substring(k.indexOf(' · ') + 3) : k,
+                indent: 22),
+        ],
+      ]      );
     });
   }
 

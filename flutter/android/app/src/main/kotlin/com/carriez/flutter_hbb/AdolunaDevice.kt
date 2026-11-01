@@ -265,8 +265,10 @@ object AdolunaDevice {
 
     // ---------------- boot relock: only once remote support is ready ----------------
     @Volatile var pendingRelock = false
-    fun bootRelock(c: Context) {
+    fun bootRelock(c: Context, reboot: Boolean = false) {
         if (!AdolunaDO.isOwner(c) || AdolunaDO.kioskPkg(c) == null) return
+        // b82: a reboot always ends a staff temporary unlock
+        if (reboot) { prefs(c).edit().remove("unlock_until").apply(); hideFloat(c) }
         val until = prefs(c).getLong("unlock_until", 0)
         if (until > System.currentTimeMillis()) { scheduleRelock(c, until - System.currentTimeMillis()); return }
         pendingRelock = true
@@ -314,6 +316,7 @@ object AdolunaDevice {
         prefs(c).edit().putLong("unlock_until", until).apply()
         AdolunaDO.stopLockKeepPkg(c)
         scheduleRelock(c, minutes * 60_000L)
+        showFloat(c)
         Log.i(TAG, "fallback unlock for $minutes min")
     }
 
@@ -324,6 +327,7 @@ object AdolunaDevice {
             if (System.currentTimeMillis() + 1000 < until) return@postDelayed
             prefs(c).edit().remove("unlock_until").apply()
             Log.i(TAG, "timed unlock over, relocking")
+            hideFloat(c)
             bootRelock(c)
         }, ms)
     }
@@ -357,6 +361,92 @@ object AdolunaDevice {
     }
     private fun openUnlock(c: Context) {
         try { c.startActivity(Intent(c, AdolunaUnlockActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { Log.w(TAG, "unlock dialog: $e") }
+    }
+
+
+    // ---------------- b82: staff temporary unlock - state, 「立即锁定」, floating countdown, watchdog ----------------
+    fun unlockUntil(c: Context): Long {
+        val u = prefs(c).getLong("unlock_until", 0)
+        return if (u > System.currentTimeMillis() && AdolunaDO.kioskPkg(c) != null) u else 0L
+    }
+    fun kioskLabel(c: Context): String {
+        val pkg = AdolunaDO.kioskPkg(c) ?: return ""
+        return try { c.packageManager.getApplicationLabel(c.packageManager.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
+    }
+    /** No PIN needed: locking is always allowed. Relocks to the backend-set app. */
+    fun relockNow(c: Context) {
+        if (prefs(c).getLong("unlock_until", 0) == 0L) return
+        Log.i(TAG, "staff relock now")
+        prefs(c).edit().remove("unlock_until").apply()
+        hideFloat(c)
+        bootRelock(c)
+    }
+
+    private var float: TextView? = null
+    private val floatTick = object : Runnable {
+        override fun run() {
+            val v = float ?: return
+            val left = (prefs(v.context).getLong("unlock_until", 0) - System.currentTimeMillis()) / 1000
+            if (left <= 0) { hideFloat(v.context); return }
+            val zh = v.resources.configuration.locale.language == "zh"
+            v.text = "%s %02d:%02d · %s".format(if (zh) "剩余" else "Left", left / 60, left % 60, if (zh) "锁定" else "Lock")
+            main.postDelayed(this, 1000)
+        }
+    }
+    fun showFloat(c: Context) = main.post {
+        val ac = c.applicationContext
+        if (float != null || unlockUntil(ac) == 0L) return@post
+        if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(ac)) { Log.w(TAG, "float: no overlay permission"); return@post }
+        val wm = ac.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val d = ac.resources.displayMetrics.density
+        val v = TextView(ac); v.setTextColor(Color.WHITE); v.textSize = 15f
+        v.setPadding((14 * d).toInt(), (8 * d).toInt(), (14 * d).toInt(), (8 * d).toInt())
+        v.background = android.graphics.drawable.GradientDrawable().apply { setColor(0xEED7262E.toInt()); cornerRadius = 20 * d }
+        val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+        val lp = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT)
+        lp.gravity = Gravity.TOP or Gravity.START; lp.x = (8 * d).toInt(); lp.y = (40 * d).toInt()
+        var dx = 0f; var dy = 0f; var sx = 0; var sy = 0; var moved = false
+        v.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { dx = e.rawX; dy = e.rawY; sx = lp.x; sy = lp.y; moved = false }
+                MotionEvent.ACTION_MOVE -> {
+                    val mx = e.rawX - dx; val my = e.rawY - dy
+                    if (Math.abs(mx) > 12 * d || Math.abs(my) > 12 * d) moved = true
+                    if (moved) { lp.x = sx + mx.toInt(); lp.y = sy + my.toInt(); try { wm.updateViewLayout(v, lp) } catch (_: Exception) {} }
+                }
+                MotionEvent.ACTION_UP -> if (!moved) relockNow(ac)
+            }
+            true
+        }
+        try { wm.addView(v, lp); float = v; main.post(floatTick); Log.i(TAG, "float shown") } catch (e: Exception) { Log.w(TAG, "float: $e") }
+    }
+    fun hideFloat(c: Context) = main.post {
+        val v = float ?: return@post; float = null
+        main.removeCallbacks(floatTick)
+        try { (c.applicationContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(v) } catch (_: Exception) {}
+    }
+
+    /** POS crashed / task removed while locked: bring the lock back (fallback page + POS as root). */
+    private var wdOn = false
+    private var wdLast = 0L
+    fun startWatchdog(c: Context) {
+        if (wdOn) return; wdOn = true
+        val ac = c.applicationContext
+        lateinit var tick: Runnable
+        tick = Runnable {
+            try {
+                if (AdolunaDO.isOwner(ac) && AdolunaDO.kioskPkg(ac) != null && !pendingRelock && unlockUntil(ac) == 0L &&
+                    !AdolunaKioskActivity.permissionInFlight && AdolunaKioskActivity.instance == null &&
+                    MainService.isReady && AdolunaDO.lockState(ac) == 0 && SystemClock.uptimeMillis() - wdLast > 15_000) {
+                    wdLast = SystemClock.uptimeMillis()
+                    Log.i(TAG, "watchdog: lock task not active, relocking")
+                    AdolunaDO.launchKiosk(ac)
+                }
+            } catch (e: Exception) { Log.w(TAG, "watchdog: $e") }
+            main.postDelayed(tick, 5000)
+        }
+        main.postDelayed(tick, 20_000)
     }
 
     // ---------------- keep-alive (all devices): keep CPU + Wi-Fi awake while the service runs ----------------

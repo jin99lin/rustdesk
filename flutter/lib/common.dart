@@ -4307,6 +4307,48 @@ Widget? buildAvatarWidget({
 final RxBool adolunaStaff = false.obs;
 final List<DateTime> _adolunaTaps = [];
 
+// ---- Adoluna b82: staff mode auto-relocks after 10 minutes, on leaving settings, or via 「锁回」 ----
+Timer? _adolunaStaffTimer;
+void adolunaStaffOn() {
+  _adolunaStaffTimer?.cancel();
+  _adolunaStaffTimer = Timer(const Duration(minutes: 10), adolunaStaffOff);
+  adolunaStaff.value = true;
+}
+
+void adolunaStaffOff() {
+  _adolunaStaffTimer?.cancel();
+  _adolunaStaffTimer = null;
+  if (adolunaStaff.value) adolunaStaff.value = false;
+}
+
+/// Red bar shown at the top of the settings page while staff mode is on.
+Widget adolunaStaffBanner() => Obx(() {
+      if (!adolunaStaff.value) return const SizedBox.shrink();
+      return Container(
+        color: const Color(0xFFFFF1F1),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(children: [
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                Text(translate('adoluna-staff-mode'),
+                    style: const TextStyle(
+                        color: Color(0xFFD7262E), fontWeight: FontWeight.bold)),
+                Text(translate('adoluna-staff-mode-hint'),
+                    style: const TextStyle(fontSize: 11, color: Colors.black54)),
+              ])),
+          ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFD7262E),
+                  foregroundColor: Colors.white),
+              onPressed: adolunaStaffOff,
+              child: Text(translate('adoluna-staff-relock'))),
+        ]),
+      );
+    });
+
 /// True when a built-in "hide-*" option hides this section for merchants (staff unlock overrides).
 bool adolunaHide(String key) =>
     !adolunaStaff.value && bind.mainGetBuildinOption(key: key) == 'Y';
@@ -4386,7 +4428,7 @@ void _adolunaAskPin() async {
     submit() {
       if (adolunaCheckPin(ctrl.text, stored)) {
         _adolunaPinFails = 0;
-        adolunaStaff.value = true;
+        adolunaStaffOn();
         close();
         showToast(translate('Advanced settings unlocked'));
       } else {
@@ -4422,4 +4464,112 @@ void _adolunaAskPin() async {
       onCancel: close,
     );
   });
+}
+
+// ---- Adoluna b82: shop staff temporary unlock (corner 7 taps + code) — countdown + 「立即锁定」 ----
+// Android: state lives in the Kotlin DO helper (method channel). Windows: the server process sets
+// option adoluna-kiosk-pause-until ("<unix s>|<app>") and watches adoluna-kiosk-relock-req.
+const kAdolunaPauseUntilOpt = 'adoluna-kiosk-pause-until';
+const kAdolunaRelockReqOpt = 'adoluna-kiosk-relock-req';
+
+class AdolunaTempUnlockCard extends StatefulWidget {
+  const AdolunaTempUnlockCard({Key? key}) : super(key: key);
+  @override
+  State<AdolunaTempUnlockCard> createState() => _AdolunaTempUnlockCardState();
+}
+
+class _AdolunaTempUnlockCardState extends State<AdolunaTempUnlockCard> {
+  Timer? _t;
+  int _untilMs = 0;
+  String _app = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (isAndroid || isWindows) {
+      _t = periodic_immediate(const Duration(seconds: 1), _poll);
+    }
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _poll() async {
+    var until = 0;
+    var app = '';
+    try {
+      if (isAndroid) {
+        final r = await gFFI.invokeMethodWithResult<Map>('adoluna_temp_unlock');
+        until = (r?['until'] as num?)?.toInt() ?? 0;
+        app = (r?['app'] as String?) ?? '';
+      } else {
+        final v = await bind.mainGetOption(key: kAdolunaPauseUntilOpt);
+        final p = v.split('|');
+        until = (int.tryParse(p.first) ?? 0) * 1000;
+        app = p.length > 1 ? p[1] : '';
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    if (until != _untilMs || app != _app || until > 0) {
+      setState(() {
+        _untilMs = until;
+        _app = app;
+      });
+    }
+  }
+
+  Future<void> _relock() async {
+    if (isAndroid) {
+      await gFFI.invokeMethod('adoluna_relock');
+    } else {
+      await bind.mainSetOption(
+          key: kAdolunaRelockReqOpt,
+          value: '${DateTime.now().millisecondsSinceEpoch ~/ 1000}');
+    }
+    if (mounted) setState(() => _untilMs = 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final left = _untilMs - DateTime.now().millisecondsSinceEpoch;
+    if (left <= 0) return const SizedBox.shrink();
+    final sec = left ~/ 1000;
+    final mmss =
+        '${(sec ~/ 60).toString().padLeft(2, '0')}:${(sec % 60).toString().padLeft(2, '0')}';
+    const red = Color(0xFFD7262E);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+          color: const Color(0xFFFFF1F1),
+          border: Border.all(color: const Color(0xFFF5B5B8)),
+          borderRadius: BorderRadius.circular(12)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Text(translate('adoluna-temp-unlocked'),
+            style: const TextStyle(color: red, fontWeight: FontWeight.bold)),
+        Text(mmss,
+            style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800)),
+        Text(
+            translate('adoluna-temp-unlock-hint')
+                .replaceAll('{app}', _app.isEmpty ? 'POS' : _app),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12, color: Colors.black54)),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: red,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14)),
+              onPressed: _relock,
+              child: Text(translate('adoluna-lock-now'),
+                  style: const TextStyle(fontSize: 18))),
+        ),
+      ]),
+    );
+  }
 }
