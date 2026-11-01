@@ -1120,7 +1120,7 @@ class H(BaseHTTPRequestHandler):
     def handle_any(self):
         if self.path.split("?")[0] == "/_adoluna/health":
             return self.health()
-        if self.path.startswith("/_adoluna/pkg/") and self.command in ("GET", "HEAD"):
+        if self.path.startswith("/api/adoluna-pkg/") and self.command in ("GET", "HEAD"):
             return self.pkg_download()
         if self.path.split("?")[0] == "/api/adoluna/ticket":
             return self.ticket()

@@ -1,6 +1,6 @@
 """Adoluna b81: software library (软件库). Admins upload apk/exe/msi; devices download by sha256 URL.
 
-Files live in PW_DIR/swlib/<sha256>.<ext> (0640).  Download URL: /_adoluna/pkg/<sha256>/<name> - public but
+Files live in PW_DIR/swlib/<sha256>.<ext> (0640).  Download URL: /api/adoluna-pkg/<sha256>/<name> - public but
 unguessable, and every device re-verifies the sha256 before installing (signed command carries the hash)."""
 import hashlib, os, re, shutil, struct, subprocess, tempfile, time, zipfile
 
@@ -163,4 +163,4 @@ def delete(c, d, sha):
     return True
 
 def url_for(base, row):
-    return "%s/_adoluna/pkg/%s/%s" % (base.rstrip("/"), row["sha256"], row["filename"])
+    return "%s/api/adoluna-pkg/%s/%s" % (base.rstrip("/"), row["sha256"], row["filename"])
