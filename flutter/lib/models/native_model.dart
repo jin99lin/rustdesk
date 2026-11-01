@@ -76,6 +76,12 @@ class PlatformFFI {
     return packageInfo.version;
   }
 
+  /// Adoluna: "1.5.0 (b80)" — numeric build number from pubspec `+N` (Android versionCode).
+  static Future<String> getVersionLabel() async {
+    PackageInfo packageInfo = await PackageInfo.fromPlatform();
+    return '${packageInfo.version.split('-').first} (b${packageInfo.buildNumber})';
+  }
+
   bool registerEventHandler(
       String eventName, String handlerName, HandleEvent handler, {bool replace = false}) {
     debugPrint('registerEventHandler $eventName $handlerName');
@@ -239,6 +245,7 @@ class PlatformFFI {
       debugPrintStack(label: 'initialize failed: $e');
     }
     version = await getVersion();
+    versionLabel = await getVersionLabel();
   }
 
   Future<bool> tryHandle(Map<String, dynamic> evt) async {

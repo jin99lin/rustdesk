@@ -85,8 +85,30 @@ fn install_android_deps() {
     println!("cargo:rustc-link-lib=OpenSLES");
 }
 
+/// Adoluna: numeric build number (b80 = 80). Single source: the `+N` in flutter/pubspec.yaml;
+/// CI may override with ADOLUNA_BUILD. Exposed to Rust as env!("ADOLUNA_BUILD").
+fn adoluna_build() {
+    println!("cargo:rerun-if-changed=flutter/pubspec.yaml");
+    println!("cargo:rerun-if-env-changed=ADOLUNA_BUILD");
+    let from_env = std::env::var("ADOLUNA_BUILD").ok().filter(|s| !s.trim().is_empty());
+    let n = from_env.unwrap_or_else(|| {
+        std::fs::read_to_string("flutter/pubspec.yaml")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("version:"))
+                    .and_then(|l| l.rsplit('+').next().map(|x| x.trim().to_owned()))
+            })
+            .unwrap_or_default()
+    });
+    let n: u32 = n.trim().parse().expect("ADOLUNA_BUILD / pubspec +N must be a positive integer");
+    assert!(n > 0, "build number must be > 0");
+    println!("cargo:rustc-env=ADOLUNA_BUILD={n}");
+}
+
 fn main() {
     hbb_common::gen_version();
+    adoluna_build();
     install_android_deps();
     #[cfg(all(windows, feature = "inline"))]
     build_manifest();

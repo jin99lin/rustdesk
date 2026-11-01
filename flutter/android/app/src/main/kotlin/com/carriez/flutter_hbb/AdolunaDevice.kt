@@ -65,12 +65,19 @@ object AdolunaDevice {
     }
 
     // ---------------- device facts ----------------
+    fun ownBuild(c: Context): Long = try {
+        val pi = c.packageManager.getPackageInfo(c.packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else @Suppress("DEPRECATION") pi.versionCode.toLong()
+    } catch (e: Exception) { 0L }
+    fun ownVersionName(c: Context): String = try { c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: "" } catch (e: Exception) { "" }
+
     fun info(c: Context): String {
         val o = JSONObject()
         val owner = AdolunaDO.isOwner(c)
         o.put("platform", "Android").put("is_owner", owner)
         o.put("model", "${Build.MANUFACTURER} ${Build.MODEL}").put("os", "Android ${Build.VERSION.RELEASE}").put("sdk", Build.VERSION.SDK_INT)
         o.put("serial", serial(c))
+        o.put("ver", ownVersionName(c)).put("build", ownBuild(c))
         try {
             val b = c.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             if (b != null) {
@@ -107,7 +114,14 @@ object AdolunaDevice {
         try {
             when (k) {
                 "ping", "info" -> ack(n, true, "ok")
-                "install", "update" -> install(c, n, p)
+                "install" -> install(c, n, p)
+                "update" -> {
+                    // compare build numbers (versionCode) only, never the version string
+                    val want = p.optLong("build", 0L); val own = ownBuild(c)
+                    if (want <= 0L) ack(n, false, "update needs a numeric build number")
+                    else if (want <= own) ack(n, true, "already up to date (b$own)")
+                    else install(c, n, p)
+                }
                 "reboot" -> if (needOwner()) {
                     if (Build.VERSION.SDK_INT < 24) ack(n, false, "reboot needs Android 7+")
                     else { ack(n, true, "rebooting"); main.postDelayed({ AdolunaDO.dpm(c).reboot(AdolunaDO.admin(c)) }, 20000) }

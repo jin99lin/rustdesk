@@ -64,6 +64,8 @@ final isWebOnLinux = isWebOnLinux_;
 final isWebOnMacOs = isWebOnMacOS_;
 var isMobile = isAndroid || isIOS;
 var version = '';
+/// Adoluna: About label, e.g. "1.5.0 (b80)".
+var versionLabel = '';
 int androidVersion = 0;
 
 // Only used on Linux.

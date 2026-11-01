@@ -101,6 +101,31 @@ pub fn clear_acks(sent: &[Value]) {
 }
 
 /// Called from the heartbeat loop with the `adoluna_cmd` array.
+/// Numeric build number (b80 = 80), from build.rs (pubspec `+N`). Updates compare this, never the version string.
+pub const BUILD: i64 = parse_build(env!("ADOLUNA_BUILD"));
+const fn parse_build(s: &str) -> i64 {
+    let b = s.as_bytes();
+    let mut i = 0;
+    let mut n = 0i64;
+    while i < b.len() {
+        n = n * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    n
+}
+/// "1.5.0 (b80)" for About screens.
+pub fn version_label() -> String {
+    format!("{} (b{})", crate::VERSION, BUILD)
+}
+/// Decide whether an `update` command should run. Compares build numbers only.
+pub fn update_decision(p: &Value, own_build: i64) -> Result<bool, String> {
+    let want = match p["build"].as_i64() {
+        Some(b) if b > 0 => b,
+        _ => return Err("update needs a numeric build number".into()),
+    };
+    Ok(want > own_build)
+}
+
 pub const OPT_STAFF_PIN: &str = "adoluna-staff-pin";
 
 /// Validate a staff_pin payload {"s": salt hex, "h": 32-byte hex, "i": iterations, "v": version}; empty h clears.
@@ -237,6 +262,7 @@ mod desktop {
             "host": sys.host_name().unwrap_or_default(),
             "mem_mb": sys.total_memory() / 1024 / 1024,
             "ver": crate::VERSION,
+            "build": super::BUILD,
         });
         #[cfg(windows)]
         {
@@ -370,10 +396,12 @@ mod desktop {
 
     /// Self-update to a backend-provided build (url + sha256 + ver).
     pub fn update(p: &Value) -> ResultType<Option<String>> {
-        let ver = p["ver"].as_str().unwrap_or_default().to_owned();
-        if !ver.is_empty() && ver == crate::VERSION && p["build"].as_i64().is_none() {
-            return Ok(Some("already up to date".into()));
+        match super::update_decision(p, super::BUILD) {
+            Err(e) => hbb_common::bail!("{e}"),
+            Ok(false) => return Ok(Some(format!("already up to date (b{})", super::BUILD))),
+            Ok(true) => {}
         }
+        let ver = format!("b{}", p["build"].as_i64().unwrap_or_default());
         if !crate::updater::has_no_active_conns() && !p["force"].as_bool().unwrap_or(false) {
             hbb_common::bail!("busy: remote session active, retry later");
         }
@@ -629,6 +657,10 @@ pub fn mac_root_poll() {
         let Ok(s) = std::fs::read_to_string(f) else { continue };
         std::fs::remove_file(f).ok();
         let Ok(p) = serde_json::from_str::<Value>(&s) else { continue };
+        if update_decision(&p, BUILD) != Ok(true) {
+            log::info!("adoluna mac update: not newer than b{BUILD}, ignored");
+            continue;
+        }
         let api = crate::ui_interface::get_api_server();
         let url = p["url"].as_str().unwrap_or_default();
         if api.is_empty() || !url.starts_with(&format!("{api}/")) {
@@ -676,6 +708,19 @@ mod tests {
         assert_eq!(super::staff_pin_payload(&json!({"h":""})).unwrap(), "");
         assert!(super::staff_pin_payload(&json!({"s":"zz","h":"00","i":5})).is_err());
         assert!(super::staff_pin_payload(&json!("nope")).is_err());
+    }
+
+    #[test]
+    fn update_compares_build_numbers_only() {
+        use super::update_decision as d;
+        assert_eq!(d(&json!({"build": 81, "ver": "1.5.0"}), 80), Ok(true));
+        assert_eq!(d(&json!({"build": 80, "ver": "1.5.1"}), 80), Ok(false));
+        assert_eq!(d(&json!({"build": 79}), 80), Ok(false));
+        assert!(d(&json!({"ver": "1.5.0-b81"}), 80).is_err());
+        assert!(d(&json!({"build": "81"}), 80).is_err());
+        assert!(d(&json!({"build": 0}), 80).is_err());
+        assert_eq!(super::BUILD, 80);
+        assert_eq!(super::version_label(), format!("{} (b80)", crate::VERSION));
     }
 
     #[test]
