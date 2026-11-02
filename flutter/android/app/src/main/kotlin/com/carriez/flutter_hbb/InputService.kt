@@ -430,42 +430,49 @@ class InputService : AccessibilityService() {
             }
         }
 
+        // b86: password fields always go through the accessibility shadow-buffer path (the IME
+        // connection may refuse/ignore them); every step is guarded so typing can't crash the process.
+        var handled = false
         if (Build.VERSION.SDK_INT >= 33) {
-            getInputMethod()?.let { inputMethod ->
-                inputMethod.getCurrentInputConnection()?.let { inputConnection ->
-                    if (textToCommit != null) {
-                        textToCommit?.let { text ->
-                            inputConnection.commitText(text, 1, null)
-                        }
-                    } else {
-                        ke?.let { event ->
-                            inputConnection.sendKeyEvent(event)
-                            if (keyEvent.getPress()) {
-                                val actionUpEvent = KeyEventAndroid(KeyEventAndroid.ACTION_UP, event.keyCode)
-                                inputConnection.sendKeyEvent(actionUpEvent)
+            try {
+                val f = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                val pwd = f?.let { if (it.isEditable) it else findFocusedEditable(it) }?.isPassword == true
+                if (!pwd) {
+                    getInputMethod()?.getCurrentInputConnection()?.let { inputConnection ->
+                        if (textToCommit != null) {
+                            handled = inputConnection.commitText(textToCommit, 1, null)
+                        } else {
+                            ke?.let { event ->
+                                handled = inputConnection.sendKeyEvent(event)
+                                if (keyEvent.getPress()) {
+                                    inputConnection.sendKeyEvent(KeyEventAndroid(KeyEventAndroid.ACTION_UP, event.keyCode))
+                                }
                             }
                         }
                     }
                 }
+            } catch (t: Throwable) {
+                Log.e(logTag, "ime key failed: ${t.javaClass.simpleName}")
             }
-        } else {
-            val handler = Handler(Looper.getMainLooper())
-            handler.post {
-                ke?.let { event ->
+        }
+        if (!handled) {
+            val ev = ke ?: KeyEventAndroid(KeyEventAndroid.ACTION_DOWN, KeyEventAndroid.KEYCODE_UNKNOWN)
+            val press = keyEvent.getPress()
+            Handler(Looper.getMainLooper()).post {
+                try {
                     val possibleNodes = possibleAccessibiltyNodes()
-                    Log.d(logTag, "possibleNodes:$possibleNodes")
                     for (item in possibleNodes) {
-                        val success = trySendKeyEvent(event, item, textToCommit)
+                        val success = trySendKeyEvent(ev, item, textToCommit)
                         if (success) {
-                            // b84: a committed character must be inserted once. Re-sending the "up" half with
-                            // textToCommit inserted it a second time (doubled/garbled remote typing).
-                            if (keyEvent.getPress() && textToCommit == null) {
-                                val actionUpEvent = KeyEventAndroid(KeyEventAndroid.ACTION_UP, event.keyCode)
-                                trySendKeyEvent(actionUpEvent, item, null)
+                            // b84: a committed character must be inserted once.
+                            if (press && textToCommit == null) {
+                                trySendKeyEvent(KeyEventAndroid(KeyEventAndroid.ACTION_UP, ev.keyCode), item, null)
                             }
                             break
                         }
                     }
+                } catch (t: Throwable) {
+                    Log.e(logTag, "a11y key failed: ${t.javaClass.simpleName}")
                 }
             }
         }
@@ -634,7 +641,54 @@ class InputService : AccessibilityService() {
         return linkedList
     }
 
+    // b86: remote input must never take the process down (P1 unlock-code dialog disconnect)
     private fun trySendKeyEvent(event: KeyEventAndroid, node: AccessibilityNodeInfo, textToCommit: String?): Boolean {
+        return try {
+            if (node.isPassword) trySendPasswordKey(event, node, textToCommit)
+            else trySendKeyEventInner(event, node, textToCommit)
+        } catch (t: Throwable) {
+            Log.e(logTag, "remote key failed: ${t.javaClass.simpleName}")
+            false
+        }
+    }
+
+    // b86: password fields. Accessibility gives masked/empty/hint text for these, so the shadow buffer
+    // is the source of truth: chars and backspace edit the buffer, SET_TEXT writes the whole buffer.
+    // Reset on a different node or when the field was cleared locally. Contents are never logged.
+    private var pwdLastSet = 0L
+    private fun trySendPasswordKey(event: KeyEventAndroid, node: AccessibilityNodeInfo, textToCommit: String?): Boolean {
+        try { node.refresh() } catch (_: Throwable) {}
+        if (event.action == KeyEventAndroid.ACTION_UP && textToCommit == null) return true
+        val key = "${node.windowId}:${node.viewIdResourceName}:${node.hashCode()}"
+        val now = System.currentTimeMillis()
+        val hint = Build.VERSION.SDK_INT >= 26 && node.isShowingHintText()
+        val shown = if (hint) 0 else (node.text?.length ?: 0)
+        if (key != pwdShadowKey) { pwdShadowKey = key; pwdShadow = "" }
+        else if (shown == 0 && pwdShadow.isNotEmpty() && now - pwdLastSet > 1500) pwdShadow = ""
+        val add: String? = textToCommit ?: run {
+            val u = event.unicodeChar
+            if (event.action == KeyEventAndroid.ACTION_DOWN && u > 0 && !Character.isISOControl(u)) String(Character.toChars(u)) else null
+        }
+        val next = when {
+            add != null -> pwdShadow + add
+            event.action == KeyEventAndroid.ACTION_DOWN && event.keyCode == KeyEventAndroid.KEYCODE_DEL -> pwdShadow.dropLast(1)
+            else -> return true
+        }
+        val args = Bundle()
+        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, next)
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (ok) {
+            pwdShadow = next; pwdLastSet = now
+            val sel = Bundle()
+            sel.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, next.length)
+            sel.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, next.length)
+            try { node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel) } catch (_: Throwable) {}
+        }
+        Log.d(logTag, "pwd key ok=$ok len=${next.length}")
+        return ok
+    }
+
+    private fun trySendKeyEventInner(event: KeyEventAndroid, node: AccessibilityNodeInfo, textToCommit: String?): Boolean {
         node.refresh()
         this.fakeEditTextForTextStateCalculation?.setSelection(0,0)
         this.fakeEditTextForTextStateCalculation?.setText(null)
