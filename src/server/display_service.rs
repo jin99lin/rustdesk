@@ -1013,6 +1013,8 @@ pub fn try_get_displays_(add_amyuni_headless: bool) -> ResultType<Vec<Display>> 
     //     return Ok(displays);
     // }
 
+    #[cfg(windows)]
+    adoluna_cleanup_stale_virtual_displays();
     let no_displays_v = no_displays(&displays);
     if no_displays_v && !adoluna_keep_display() {
         log::debug!("no displays, create virtual display");
@@ -1312,10 +1314,29 @@ mod wayland_layout_tests {
     }
 }
 
-/// b88: switch to keep the physical display untouched during a session (no remote resolution
-/// change, no headless virtual display). On with env ADOLUNA_KEEP_DISPLAY=1 or local option
-/// `adoluna-keep-display` = "Y" (pushable from the backend as a device option).
+/// b88: keep the physical display untouched during a session (no remote resolution change,
+/// no auto headless virtual display). Default ON for Adoluna builds: small touch panels
+/// (e.g. 1024x768 eGalax) were treated as "no display", a usbmmidd virtual display was
+/// plugged in and Windows routed touch to it. Opt out with env ADOLUNA_KEEP_DISPLAY=0 or
+/// option `adoluna-keep-display` = "N". Manual "virtual display" toggle still works.
 pub fn adoluna_keep_display() -> bool {
-    std::env::var("ADOLUNA_KEEP_DISPLAY").map(|v| v == "1").unwrap_or(false)
-        || hbb_common::config::Config::get_option("adoluna-keep-display") == "Y"
+    if let Ok(v) = std::env::var("ADOLUNA_KEEP_DISPLAY") {
+        return v != "0";
+    }
+    hbb_common::config::Config::get_option("adoluna-keep-display") != "N"
+}
+
+/// b88: once per process, unplug any virtual displays left over (e.g. a crashed session),
+/// so a stale virtual screen can't keep stealing touch input.
+#[cfg(windows)]
+pub fn adoluna_cleanup_stale_virtual_displays() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if adoluna_keep_display() {
+            match virtual_display_manager::reset_all() {
+                Ok(_) => log::info!("adoluna: startup virtual display cleanup done"),
+                Err(e) => log::info!("adoluna: startup virtual display cleanup: {}", e),
+            }
+        }
+    });
 }
