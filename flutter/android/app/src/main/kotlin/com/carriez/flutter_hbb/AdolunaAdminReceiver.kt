@@ -75,9 +75,9 @@ object AdolunaDO {
         val d = dpm(c); val a = admin(c)
         try { d.setLockTaskPackages(a, arrayOf(c.packageName, pkg, "com.android.systemui")) } catch (e: Exception) { Log.e(TAG, "kiosk: setLockTaskPackages failed: $e"); return false }
         if (Build.VERSION.SDK_INT >= 28) try {
-            // b84: status bar hidden again (the POS app shows its own clock/network/battery);
-            // notifications, home, recents, global actions all blocked.
-            d.setLockTaskFeatures(a, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
+            // b85 (Jay 11/2): show the status bar again (time / network / battery);
+            // notifications, home, recents, global actions stay blocked.
+            d.setLockTaskFeatures(a, DevicePolicyManager.LOCK_TASK_FEATURE_SYSTEM_INFO)
         } catch (e: Exception) { Log.w(TAG, "kiosk: setLockTaskFeatures: $e") }
         val pkgs = try { d.getLockTaskPackages(a).joinToString(",") } catch (e: Exception) { "err $e" }
         Log.i(TAG, "kiosk: lockTaskPackages=[$pkgs] permitted(self)=${d.isLockTaskPermitted(c.packageName)} permitted($pkg)=${d.isLockTaskPermitted(pkg)}")
