@@ -440,10 +440,10 @@ class InputService : AccessibilityService() {
                 if (!pwd) {
                     getInputMethod()?.getCurrentInputConnection()?.let { inputConnection ->
                         if (textToCommit != null) {
-                            handled = inputConnection.commitText(textToCommit, 1, null)
+                            inputConnection.commitText(textToCommit, 1, null); handled = true
                         } else {
                             ke?.let { event ->
-                                handled = inputConnection.sendKeyEvent(event)
+                                inputConnection.sendKeyEvent(event); handled = true
                                 if (keyEvent.getPress()) {
                                     inputConnection.sendKeyEvent(KeyEventAndroid(KeyEventAndroid.ACTION_UP, event.keyCode))
                                 }
