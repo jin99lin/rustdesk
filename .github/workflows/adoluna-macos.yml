@@ -70,7 +70,7 @@ jobs:
       matrix:
         job:
           - { target: x86_64-apple-darwin, os: macos-15-intel, arch: x86_64, extra: "" }
-          - { target: aarch64-apple-darwin, os: macos-15, arch: aarch64, extra: "--screencapturekit" }
+          - { target: aarch64-apple-darwin, os: macos-14, arch: aarch64, extra: "--screencapturekit" }
     runs-on: ${{ matrix.job.os }}
     steps:
       - uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
