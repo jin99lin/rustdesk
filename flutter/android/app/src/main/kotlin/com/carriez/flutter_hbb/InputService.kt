@@ -416,7 +416,7 @@ class InputService : AccessibilityService() {
         } else {
         }
 
-        Log.d(logTag, "onKeyEvent $keyEvent textToCommit:$textToCommit")
+        Log.d(logTag, "onKeyEvent mode:$keyboardMode down:${keyEvent.getDown()} press:${keyEvent.getPress()} hasText:${textToCommit != null}")
 
         var ke: KeyEventAndroid? = null
         if (Build.VERSION.SDK_INT < 33 || textToCommit == null) {
@@ -457,9 +457,11 @@ class InputService : AccessibilityService() {
                     for (item in possibleNodes) {
                         val success = trySendKeyEvent(event, item, textToCommit)
                         if (success) {
-                            if (keyEvent.getPress()) {
+                            // b84: a committed character must be inserted once. Re-sending the "up" half with
+                            // textToCommit inserted it a second time (doubled/garbled remote typing).
+                            if (keyEvent.getPress() && textToCommit == null) {
                                 val actionUpEvent = KeyEventAndroid(KeyEventAndroid.ACTION_UP, event.keyCode)
-                                trySendKeyEvent(actionUpEvent, item, textToCommit)
+                                trySendKeyEvent(actionUpEvent, item, null)
                             }
                             break
                         }
@@ -608,7 +610,22 @@ class InputService : AccessibilityService() {
         this.fakeEditTextForTextStateCalculation?.setSelection(0,0)
         this.fakeEditTextForTextStateCalculation?.setText(null)
 
-        val text = node.getText()
+        var text = node.getText()
+        // b84: password fields (e.g. our staff-PIN dialog, POS login) expose only mask characters
+        // ("•••") through accessibility, never the real text. The fake-EditText calculation then built
+        // the new value from the bullets; the field's digits-only filter stripped them and every earlier
+        // character was lost ("each typed char deletes the previous one"). Keep our own shadow copy of
+        // what remote typing put into the focused password node and use it instead of the mask while
+        // its length still matches the masked length (local typing in between resets it).
+        val isPwd = node.isPassword
+        val pwdKey = if (isPwd) "${node.windowId}:${node.viewIdResourceName}:${node.hashCode()}" else null
+        if (isPwd) {
+            val masked = text?.length ?: 0
+            if (pwdKey != pwdShadowKey) { pwdShadowKey = pwdKey; pwdShadow = "" }
+            if (masked == pwdShadow.length) text = pwdShadow
+            else if (masked == 0) { pwdShadow = ""; text = "" }
+            else { pwdShadow = ""; text = null }
+        }
         var isShowingHint = false
         if (Build.VERSION.SDK_INT >= 26) {
             isShowingHint = node.isShowingHintText()
@@ -631,7 +648,12 @@ class InputService : AccessibilityService() {
 
         var success = false
 
-        Log.d(logTag, "existing text:$text textToCommit:$textToCommit textSelectionStart:$textSelectionStart textSelectionEnd:$textSelectionEnd")
+        if (isPwd && text != null && (textSelectionStart == -1 || textSelectionEnd == -1)) {
+            // Flutter password nodes may report no selection; append at the end instead of replacing all.
+            textSelectionStart = text.length; textSelectionEnd = text.length
+        }
+        // never log password contents (b84)
+        Log.d(logTag, "existing text:${if (isPwd) "<pwd len=${text?.length}>" else text} textToCommit:${if (isPwd) "<hidden>" else textToCommit} textSelectionStart:$textSelectionStart textSelectionEnd:$textSelectionEnd")
 
         if (textToCommit != null) {
             if ((textSelectionStart == -1) || (textSelectionEnd == -1)) {
@@ -679,8 +701,13 @@ class InputService : AccessibilityService() {
 
             success = updateTextAndSelectionForAccessibiltyNode(node)
         }
+        if (isPwd && success) {
+            pwdShadow = this.fakeEditTextForTextStateCalculation?.text?.toString() ?: ""
+        }
         return success
     }
+    private var pwdShadow: String = ""
+    private var pwdShadowKey: String? = null
 
     fun updateTextForAccessibilityNode(node: AccessibilityNodeInfo): Boolean {
         var success = false

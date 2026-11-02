@@ -141,7 +141,10 @@ jobs:
         run: |
           if (!(Test-Path ./rustdesk/AdolunaSupport.exe)) { mv ./rustdesk/rustdesk.exe ./rustdesk/AdolunaSupport.exe }
           pushd ./res/msi
-          python preprocess.py --arp -d ../../rustdesk --app-name AdolunaSupport --manufacturer Adoluna -v ${{ env.VERSION }}
+          # b84: stamp the Adoluna build number: MSI ProductVersion 1.5.0.<build> (shown in Programs & Features)
+          $b = ((Select-String -Path ../../flutter/pubspec.yaml -Pattern '^version:').Line -split '\+')[-1].Trim()
+          Write-Host "Adoluna build $b"
+          python preprocess.py --arp -d ../../rustdesk --app-name AdolunaSupport --manufacturer Adoluna -v ${{ env.VERSION }} --revision-version $b
           # Adoluna: visible names (Programs & Features, Start menu/desktop shortcuts) use "Adoluna Support";
           # exe, install dir, service name and UpgradeCode stay "AdolunaSupport".
           $wxl = './Package/Language/Package.en-us.wxl'

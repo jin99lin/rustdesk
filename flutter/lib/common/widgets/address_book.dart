@@ -158,7 +158,12 @@ class _AddressBookState extends State<AddressBook> {
         ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
       final sel = gFFI.abModel.selectedTags;
       final cur = sel.isEmpty ? '' : sel.first;
-      if (cur.isNotEmpty && !counts.containsKey(cur)) {
+      if (cur.isNotEmpty &&
+          !counts.containsKey(cur) &&
+          !(cur.startsWith(kAdolunaMerchantSel) &&
+              counts.keys.any((k) =>
+                  k == cur.substring(kAdolunaMerchantSel.length) ||
+                  k.startsWith('${cur.substring(kAdolunaMerchantSel.length)} · ')))) {
         WidgetsBinding.instance.addPostFrameCallback((_) => sel.clear());
       }
       void pick(String k) {
@@ -223,14 +228,37 @@ class _AddressBookState extends State<AddressBook> {
       return ListView(children: [
         row('', '$allLabel (${peers.length})'),
         for (final m in ms) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 10, 10, 2),
-            child: Text(m,
-                style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.bold)),
-          ),
+          // b84: tapping the merchant heading shows the devices of all its stores
+          Builder(builder: (_) {
+            final mk = '$kAdolunaMerchantSel$m';
+            final msel = cur == mk;
+            var mOn = 0, mAll = 0;
+            for (final p in peers) {
+              if (p.tags.any((t) => adolunaTagInMerchant(t.toString(), m))) {
+                mAll++;
+                if (p.online) mOn++;
+              }
+            }
+            return InkWell(
+              onTap: () => pick(mk),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+                color: msel
+                    ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
+                    : null,
+                child: Row(children: [
+                  Expanded(
+                      child: Text(m,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: msel ? null : Colors.grey,
+                              fontWeight: FontWeight.bold))),
+                  Text('$mOn/$mAll',
+                      style: TextStyle(fontSize: 11, color: Colors.grey)),
+                ]),
+              ),
+            );
+          }),
           for (final k in groups[m]!)
             row(k, k.contains(' · ') ? k.substring(k.indexOf(' · ') + 3) : k,
                 indent: 22),

@@ -254,6 +254,9 @@ fn execute(c: &Cmd) -> ResultType<Option<String>> {
             Config::set_option("adoluna-otp-k".into(), c.p["k"].as_str().unwrap_or_default().into());
             Ok(Some("one-time code secret set".into()))
         }
+        // b84: real info handler (Windows/macOS/Linux): refresh and return the full device facts,
+        // including touchscreen HID/driver details on Windows. Also pushed by the next heartbeat.
+        "info" => Ok(Some(desktop::info_fresh().to_string())),
         k => hbb_common::bail!("unsupported on this platform: {k}"),
     }
 }
@@ -287,6 +290,55 @@ mod desktop {
 
     lazy_static::lazy_static! {
         static ref INFO: Mutex<(Option<std::time::Instant>, Value)> = Mutex::new((None, Value::Null));
+    }
+
+    pub fn info_fresh() -> Value {
+        INFO.lock().unwrap().0 = None;
+        #[cfg(windows)]
+        {
+            *TOUCH.lock().unwrap() = None;
+        }
+        info()
+    }
+
+    #[cfg(windows)]
+    lazy_static::lazy_static! {
+        static ref TOUCH: Mutex<Option<Value>> = Mutex::new(None);
+    }
+
+    /// b84: touchscreen diagnostics (digitizer caps, touch/pointing HID devices + driver, tablet input
+    /// service, whether our input-block hook is active). Computed once per process / per `info` command.
+    #[cfg(windows)]
+    fn touch_info() -> Value {
+        let mut g = TOUCH.lock().unwrap();
+        if let Some(v) = g.as_ref() {
+            return v.clone();
+        }
+        let (dig, maxt) = unsafe {
+            (
+                winapi::um::winuser::GetSystemMetrics(94), // SM_DIGITIZER
+                winapi::um::winuser::GetSystemMetrics(95), // SM_MAXIMUMTOUCHES
+            )
+        };
+        let ps = |s: &str| run_ps(s).map(|x| x.trim().to_owned()).unwrap_or_default();
+        let devs = ps(r#"$r=@(Get-WmiObject Win32_PnPSignedDriver | ?{ $_.DeviceName -match 'touch|digitizer|pen|tablet|eGalax|ILITEK|Elo|Goodix|Weida|SiS|Atmel|eeti|hid-compliant mouse' -or $_.HardWareID -match 'VID_0EEF|VID_222A|VID_04E7|VID_27C6|VID_2575|VID_0457|VID_03EB|VID_1FD2|VID_0DFC|VID_2386' } | %{ [ordered]@{name=$_.DeviceName;mfr=$_.Manufacturer;provider=$_.DriverProviderName;ver=$_.DriverVersion;date="$($_.DriverDate)".Substring(0,[Math]::Min(8,"$($_.DriverDate)".Length));inf=$_.InfName;hwid=("$($_.HardWareID)" -split ' ')[0];class=$_.DeviceClass} }); ConvertTo-Json -Compress -Depth 3 @($r)"#);
+        let pointing = ps(r#"$r=@(Get-WmiObject Win32_PointingDevice | %{ [ordered]@{name=$_.Name;mfr=$_.Manufacturer;pnp=$_.PNPDeviceID;status=$_.Status} }); ConvertTo-Json -Compress -Depth 3 @($r)"#);
+        let tab = ps("(Get-Service TabletInputService -EA 0).Status");
+        let parse = |s: &str| serde_json::from_str::<Value>(s).unwrap_or(json!(s));
+        let v = json!({
+            "digitizer": dig,
+            "integrated_touch": dig & 0x01 != 0,
+            "external_touch": dig & 0x02 != 0,
+            "multi_input": dig & 0x40 != 0,
+            "ready": dig & 0x80 != 0,
+            "max_touches": maxt,
+            "devices": parse(&devs),
+            "pointing": parse(&pointing),
+            "tablet_input_service": tab,
+            "block_hook_active": crate::platform::windows::adoluna_block_active(),
+        });
+        *g = Some(v.clone());
+        v
     }
 
     pub fn info() -> Value {
@@ -324,6 +376,7 @@ mod desktop {
             v["kiosk"] = json!(full || basic);
             v["kiosk_mode"] = json!(if full { "full" } else if basic { "basic" } else { "" });
             v["kiosk_capable"] = json!(w.kiosk != "none");
+            v["touch"] = touch_info();
             v["apps_hash"] = json!(ps(&format!("{WIN_APPS_PS}\r\n$h=($r|%{{$_.name+'|'+$_.exe}}|Sort-Object) -join \"`n\"; $b=[Text.Encoding]::UTF8.GetBytes($h); (([Security.Cryptography.SHA256]::Create().ComputeHash($b))[0..7]|%{{$_.ToString('x2')}}) -join ''")));
         }
         #[cfg(target_os = "macos")]
@@ -333,6 +386,13 @@ mod desktop {
             v["serial"] = json!(sh("ioreg -c IOPlatformExpertDevice -d 2 | awk -F\\\" '/IOPlatformSerialNumber/{print $4}'"));
             v["model"] = json!(sh("sysctl -n hw.model"));
             v["disk_free_gb"] = json!(sh("df -g / | awk 'NR==2{print $4}'"));
+            // b84: real macOS info
+            v["os_build"] = json!(sh("sw_vers -buildVersion"));
+            v["os_version"] = json!(sh("sw_vers -productVersion"));
+            v["cpu"] = json!(sh("sysctl -n machdep.cpu.brand_string"));
+            v["arch"] = json!(sh("uname -m"));
+            v["boot_time"] = json!(sh("sysctl -n kern.boottime"));
+            v["mem_pressure"] = json!(sh("memory_pressure -Q 2>/dev/null | tail -1"));
         }
         #[cfg(target_os = "linux")]
         {

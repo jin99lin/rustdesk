@@ -25,6 +25,10 @@ bool shouldSortTags() {
 }
 
 final filterAbTagOption = 'filter-ab-by-intersection';
+/// Adoluna b84: selectedTags entry meaning "all stores of merchant <name>".
+const String kAdolunaMerchantSel = '\u0001merchant:';
+bool adolunaTagInMerchant(String tag, String m) => tag == m || tag.startsWith('$m · ');
+
 bool filterAbTagByIntersection() {
   return bind.mainGetLocalOption(key: filterAbTagOption) == 'Y';
 }

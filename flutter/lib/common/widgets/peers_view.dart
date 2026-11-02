@@ -533,6 +533,15 @@ class AddressBookPeersView extends BasePeersView {
     if (selectedTags.isEmpty) {
       return true;
     }
+    // Adoluna b84: a merchant heading selection matches every store tag of that merchant
+    final msel = selectedTags
+        .map((e) => e.toString())
+        .where((e) => e.startsWith(kAdolunaMerchantSel))
+        .toList();
+    if (msel.isNotEmpty) {
+      final m = msel.first.substring(kAdolunaMerchantSel.length);
+      return idents.any((t) => adolunaTagInMerchant(t.toString(), m));
+    }
     // The result of a no-tag union with normal tags, still allows normal tags to perform union or intersection operations.
     final selectedNormalTags =
         selectedTags.where((tag) => tag != kUntagged).toList();

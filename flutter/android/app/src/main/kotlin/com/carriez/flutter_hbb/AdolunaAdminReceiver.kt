@@ -75,8 +75,9 @@ object AdolunaDO {
         val d = dpm(c); val a = admin(c)
         try { d.setLockTaskPackages(a, arrayOf(c.packageName, pkg, "com.android.systemui")) } catch (e: Exception) { Log.e(TAG, "kiosk: setLockTaskPackages failed: $e"); return false }
         if (Build.VERSION.SDK_INT >= 28) try {
-            // b82: status bar shows time / network / battery; notifications, home, recents stay blocked
-            d.setLockTaskFeatures(a, DevicePolicyManager.LOCK_TASK_FEATURE_SYSTEM_INFO)
+            // b84: status bar hidden again (the POS app shows its own clock/network/battery);
+            // notifications, home, recents, global actions all blocked.
+            d.setLockTaskFeatures(a, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
         } catch (e: Exception) { Log.w(TAG, "kiosk: setLockTaskFeatures: $e") }
         val pkgs = try { d.getLockTaskPackages(a).joinToString(",") } catch (e: Exception) { "err $e" }
         Log.i(TAG, "kiosk: lockTaskPackages=[$pkgs] permitted(self)=${d.isLockTaskPermitted(c.packageName)} permitted($pkg)=${d.isLockTaskPermitted(pkg)}")
@@ -295,8 +296,10 @@ class AdolunaKioskActivity : Activity() {
         Handler(Looper.getMainLooper()).postDelayed({
             val st = AdolunaDO.lockState(this)
             Log.i(TAG, "kiosk: after launch lockTaskModeState=$st (0=NONE 1=LOCKED 2=PINNED)")
-            // POS is the lock-task root now: remove this page so nothing blank sits behind the POS.
-            if (posRoot && st != 0) finishAndRemoveTask()
+            // b84: keep this page alive (in its own locked task) underneath the POS. If the POS finishes
+            // itself (e.g. its "press Back twice to exit"), lock task falls back to this page, which shows
+            // the logo + 「正在返回…」 and onResume relaunches the POS — the device never leaves the kiosk.
+            if (posRoot && st != 0) { /* stay as the guard page behind the POS */ }
             else if (posRoot && AdolunaDevice.unlockUntil(this) == 0L) { launched = false; Handler(Looper.getMainLooper()).postDelayed({ if (!isFinishing && AdolunaDevice.unlockUntil(this) == 0L) launchTarget(pkg) }, 3000) }
         }, 1500)
     }

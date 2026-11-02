@@ -1921,7 +1921,8 @@ unsafe extern "system" fn adoluna_ll_mouse(code: c_int, wparam: WPARAM, lparam: 
         let ms = &*(lparam as *const MSLLHOOKSTRUCT);
         let injected = (ms.flags & LLMHF_INJECTED) != 0;
         // Touch/pen input promoted to legacy mouse messages carries this signature.
-        let from_touch_or_pen = (ms.dwExtraInfo & 0xFFFFFF80) == 0xFF515700;
+        // b84: mask was 0xFFFFFF80, which never matched TOUCH (0xFF515780), only pen
+        let from_touch_or_pen = (ms.dwExtraInfo & 0xFFFFFF00) == 0xFF515700;
         if !injected && !from_touch_or_pen {
             return 1; // swallow physical mouse only
         }
@@ -1987,6 +1988,11 @@ fn adoluna_block_start() -> (bool, String) {
         Ok(r) => r,
         Err(_) => (false, "block_input thread did not start".to_owned()),
     }
+}
+
+/// b84: whether the touch-preserving input-block hook is currently swallowing physical input.
+pub fn adoluna_block_active() -> bool {
+    ADOLUNA_BLK_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 pub fn block_input(v: bool) -> (bool, String) {
