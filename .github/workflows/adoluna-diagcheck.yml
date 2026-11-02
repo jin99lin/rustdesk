@@ -1,6 +1,7 @@
 name: adoluna-diagcheck
 on:
-  workflow_dispatch:
+  push:
+    paths: ["res/adoluna/diag/**", ".github/workflows/adoluna-diagcheck.yml"]
 jobs:
   check:
     runs-on: windows-latest
