@@ -27,10 +27,10 @@ public static class TD {
   [StructLayout(LayoutKind.Sequential)] struct RIH { public uint type, size; public IntPtr dev, w; }
   [DllImport("user32.dll")] static extern uint GetRawInputData(IntPtr h, uint cmd, IntPtr d, ref uint sz, uint hs);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern uint GetRawInputDeviceInfo(IntPtr d, uint cmd, System.Text.StringBuilder s, ref uint sz);
-  [StructLayout(LayoutKind.Sequential)] public struct PDI { public uint type; public IntPtr dev, mon; public uint cursorId, maxCount; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=520)] public string name; }
+  [StructLayout(LayoutKind.Sequential)] public struct PDI { public uint orient; public IntPtr dev; public uint type; public IntPtr mon; public uint cursorId; public ushort maxCount; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=520)] public string name; }
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool GetPointerDevices(ref uint n, [Out] PDI[] d);
   public static string Pointers() { try { uint n = 0; GetPointerDevices(ref n, null); var a = new PDI[n]; GetPointerDevices(ref n, a);
-      var s = new List<string>(); foreach (var p in a) s.Add("type=" + p.type + " mon=" + p.mon + " name=" + p.name); return string.Join(" | ", s); } catch (Exception x) { return "err " + x.Message; } }
+      var s = new List<string>(); foreach (var p in a) s.Add("type=" + p.type + " mon=" + p.mon + "(" + MonName(p.mon) + ") contacts=" + p.maxCount + " name=" + p.name); return string.Join(" | ", s); } catch (Exception x) { return "err " + x.Message; } }
   class W : NativeWindow { public W() { CreateHandle(new CreateParams());
       var r = new RID[] { new RID{page=1,usage=2,flags=0x100,hwnd=Handle}, new RID{page=0xD,usage=4,flags=0x100,hwnd=Handle}, new RID{page=0xD,usage=5,flags=0x100,hwnd=Handle} };
       RegisterRawInputDevices(r, (uint)r.Length, (uint)Marshal.SizeOf(typeof(RID))); }
@@ -40,6 +40,17 @@ public static class TD {
         RIH h = (RIH)Marshal.PtrToStructure(b, typeof(RIH)); Marshal.FreeHGlobal(b);
         string k = "type" + h.type; if (h.dev == IntPtr.Zero) k += ":NULL(injected)"; else { uint n = 512; var s = new System.Text.StringBuilder(512); GetRawInputDeviceInfo(h.dev, 0x20000007, s, ref n); k += ":" + s.ToString(); }
         lock (Raw) { int v; Raw.TryGetValue(k, out v); Raw[k] = v + 1; } } catch {} } base.WndProc(ref m); } }
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct DD { public int cb; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string name; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string str; public uint flags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string id; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string key; }
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool EnumDisplayDevices(string dev, uint i, ref DD d, uint f);
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct MIEX { public int cb; public int l,t,r,b, wl,wt,wr,wb; public uint flags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dev; }
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr h, ref MIEX m);
+  static string MonName(IntPtr h) { var m = new MIEX(); m.cb = Marshal.SizeOf(typeof(MIEX)); return GetMonitorInfo(h, ref m) ? m.dev : "?"; }
+  public static string Displays() { var o = new List<string>(); try {
+    for (uint i = 0; i < 32; i++) { var a = new DD(); a.cb = Marshal.SizeOf(typeof(DD)); if (!EnumDisplayDevices(null, i, ref a, 0)) break;
+      if ((a.flags & 1) == 0) continue; // attached to desktop only
+      string mons = ""; for (uint j = 0; j < 4; j++) { var m = new DD(); m.cb = Marshal.SizeOf(typeof(DD)); if (!EnumDisplayDevices(a.name, j, ref m, 0)) break; mons += "[" + m.str + " " + m.id + "]"; }
+      o.Add(a.name + ((a.flags & 4) != 0 ? " PRIMARY" : "") + " adapter=" + a.str + " " + mons); } } catch (Exception x) { o.Add("err " + x.Message); }
+    return string.Join(" | ", o); }
   static W win;
   public static void Start() { keep = Hook; hk = SetWindowsHookEx(14, keep, GetModuleHandle(null), 0); win = new W(); }
   public static string TakeRaw() { lock (Raw) { var s = new List<string>(); foreach (var kv in Raw) s.Add(kv.Value + "x " + kv.Key); Raw.Clear(); return string.Join(" ; ", s); } }
@@ -56,18 +67,25 @@ function Conn {
 L "=== Adoluna touchdiag $ts user=$env:USERNAME host=$env:COMPUTERNAME"
 Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_0EEF|VID_29BD' -or $_.Class -match 'HIDClass|Mouse' } | ForEach-Object { L "pnp $($_.Status) $($_.Class) $($_.FriendlyName) $($_.InstanceId)" }
 L "tabletinput: $(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Wisp\Pen\Digimon' -ErrorAction SilentlyContinue | Out-String -Width 400)"
-[TD]::Start()
-$t = New-Object Windows.Forms.Timer; $t.Interval = 1000; $script:n = 0; $script:last = ''
-$t.Add_Tick({
-  $script:n++
-  $scr = ([Windows.Forms.Screen]::AllScreens | ForEach-Object { "$($_.DeviceName) $($_.Bounds.Width)x$($_.Bounds.Height)@$($_.Bounds.X),$($_.Bounds.Y)" }) -join ' / '
-  $line = "$(Conn) | screens=$scr | ll phys=$([TD]::Phys) inj=$([TD]::Inj) touchSig=$([TD]::TouchSig) down=$([TD]::Down) up=$([TD]::Up) | raw: $([TD]::TakeRaw())"
-  [TD]::Phys = 0; [TD]::Inj = 0; [TD]::TouchSig = 0; [TD]::Down = 0; [TD]::Up = 0
-  L $line
-  if ($script:n % 10 -eq 1) { L "pointerDevices: $([TD]::Pointers())" }
-  if ($script:n -ge $Seconds) { $t.Stop(); [Windows.Forms.Application]::Exit() }
-})
-$t.Start(); [Windows.Forms.Application]::Run()
+try { [TD]::Start() } catch { L "START ERROR: $($_.Exception.Message)" }
+function Digimon { try { $k = 'HKLM:\SOFTWARE\Microsoft\Wisp\Pen\Digimon'; if (Test-Path $k) { (Get-Item $k).Property | ForEach-Object { "$_ = $((Get-ItemProperty $k).$_)" } | Out-String -Width 500 } else { 'none' } } catch { "err $($_.Exception.Message)" } }
+L "display devices (PnP): $((Get-PnpDevice -Class Display -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Status) $($_.FriendlyName) $($_.InstanceId)" }) -join ' / ')"
+$sw = [Diagnostics.Stopwatch]::StartNew(); $next = 0; $script:n = 0; $prevTopo = ''
+while ($sw.Elapsed.TotalSeconds -lt $Seconds) {
+  try { [Windows.Forms.Application]::DoEvents() } catch { L "PUMP ERROR: $($_.Exception.Message)" }
+  if ($sw.ElapsedMilliseconds -ge $next) {
+    $next += 1000; $script:n++
+    try {
+      $scr = ([Windows.Forms.Screen]::AllScreens | ForEach-Object { "$($_.DeviceName)$(if ($_.Primary) {'*'}) $($_.Bounds.Width)x$($_.Bounds.Height)@$($_.Bounds.X),$($_.Bounds.Y)" }) -join ' / '
+      $line = "$(Conn) | screens=$scr | ll phys=$([TD]::Phys) inj=$([TD]::Inj) touchSig=$([TD]::TouchSig) down=$([TD]::Down) up=$([TD]::Up) | raw: $([TD]::TakeRaw())"
+      [TD]::Phys = 0; [TD]::Inj = 0; [TD]::TouchSig = 0; [TD]::Down = 0; [TD]::Up = 0
+      L $line
+      $topo = [TD]::Displays()
+      if ($topo -ne $prevTopo -or $script:n % 10 -eq 1) { L "topology: $topo"; L "pointerDevices: $([TD]::Pointers())"; L "digimon: $(Digimon)"; $prevTopo = $topo }
+    } catch { L "SAMPLE ERROR: $($_.Exception.Message)" }
+  }
+  Start-Sleep -Milliseconds 20
+}
 # collect Adoluna logs
 $z = Join-Path $out "touchdiag-$ts"; New-Item -ItemType Directory -Force $z | Out-Null
 Copy-Item $log $z
