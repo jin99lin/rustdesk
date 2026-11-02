@@ -49,7 +49,7 @@ function L($s) { $l = "$(Get-Date -Format 'HH:mm:ss') $s"; Add-Content $log $l; 
 function Conn {
   $p = Get-Process | Where-Object { $_.ProcessName -match 'adoluna|rustdesk' }
   $c = @(Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | Where-Object { $p.Id -contains $_.OwningProcess })
-  $rf = Get-ChildItem -Path 'C:\ProgramData' -Recurse -Filter 'kiosk-remote' -ErrorAction SilentlyContinue | Select-Object -First 1
+  $rf = Get-Item 'C:\ProgramData\AdolunaSupport\kiosk-remote' -ErrorAction SilentlyContinue
   $age = if ($rf) { [int]((Get-Date) - $rf.LastWriteTime).TotalSeconds } else { -1 }
   "procs=$(@($p).Count) tcp=$($c.Count) kioskRemoteAge=${age}s"
 }
