@@ -554,11 +554,40 @@ class InputService : AccessibilityService() {
         return null
     }
 
+    private fun findFocusedEditable(n: AccessibilityNodeInfo, depth: Int = 0): AccessibilityNodeInfo? {
+        if (n.isEditable && n.isFocused) return n
+        if (depth > 40) return null
+        for (i in 0 until n.childCount) {
+            val c = n.getChild(i) ?: continue
+            findFocusedEditable(c, depth + 1)?.let { return it }
+        }
+        return null
+    }
+
+    // b85: last text we wrote per node, to survive apps that re-filter / rewrite asynchronously
+    private var lastSetKey: String? = null
+    private var lastSetBefore: String? = null
+    private var lastSetAfter: String? = null
+    private var lastSetAt = 0L
+
     private fun possibleAccessibiltyNodes(): LinkedList<AccessibilityNodeInfo> {
         val linkedList = LinkedList<AccessibilityNodeInfo>()
         val latestList = LinkedList<AccessibilityNodeInfo>()
 
         val focusInput = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        // b85: remote typing must go to the field that has INPUT focus right now. Before, the
+        // accessibility-focus node (which a tap does not move, e.g. still on "username") and the root
+        // were also tried, and SET_TEXT on them moved the caret back to the first field. Re-query every
+        // key; if an editable owns input focus (directly or as a focused descendant) use only that.
+        run {
+            val live = focusInput?.let { if (it.isEditable) it else findFocusedEditable(it) }
+                ?: getRootInActiveWindow()?.let { findFocusedEditable(it) }
+            if (live != null) {
+                val only = LinkedList<AccessibilityNodeInfo>()
+                only.add(live)
+                return only
+            }
+        }
         var focusAccessibilityInput = findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
 
         val rootInActiveWindow = getRootInActiveWindow()
@@ -646,10 +675,27 @@ class InputService : AccessibilityService() {
             }
         }
 
+        val nodeKey = "${node.windowId}:${node.viewIdResourceName}:${node.hashCode()}"
+        if (event.action == KeyEventAndroid.ACTION_UP && textToCommit == null) {
+            // b85: the "up" half changes nothing in an EditText; writing the (possibly stale) text back
+            // here is what deleted every other character in live-filter search boxes.
+            return true
+        }
+        if (!isPwd && nodeKey == lastSetKey && System.currentTimeMillis() - lastSetAt < 800 &&
+            text?.toString() == lastSetBefore && lastSetAfter != null) {
+            // the app has not reported our previous edit yet: build on what we wrote, not the stale value
+            text = lastSetAfter
+            textSelectionStart = text!!.length; textSelectionEnd = text!!.length
+        }
         var success = false
 
-        if (isPwd && text != null && (textSelectionStart == -1 || textSelectionEnd == -1)) {
-            // Flutter password nodes may report no selection; append at the end instead of replacing all.
+        if (isShowingHint && textToCommit != null) {
+            // b85: the hint ("请输入…") is not content; never insert into it
+            text = ""; textSelectionStart = 0; textSelectionEnd = 0
+        }
+        if (text != null && (textSelectionStart == -1 || textSelectionEnd == -1)) {
+            // b85 (all fields, was password-only in b84): no reported selection -> append at the end
+            // instead of replacing the whole field with the single typed character.
             textSelectionStart = text.length; textSelectionEnd = text.length
         }
         // never log password contents (b84)
@@ -700,6 +746,10 @@ class InputService : AccessibilityService() {
             }
 
             success = updateTextAndSelectionForAccessibiltyNode(node)
+        }
+        if (success) {
+            lastSetKey = nodeKey; lastSetBefore = text?.toString() ?: ""
+            lastSetAfter = this.fakeEditTextForTextStateCalculation?.text?.toString(); lastSetAt = System.currentTimeMillis()
         }
         if (isPwd && success) {
             pwdShadow = this.fakeEditTextForTextStateCalculation?.text?.toString() ?: ""
