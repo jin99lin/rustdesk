@@ -33,6 +33,19 @@ pub fn take_apps() -> Option<Value> {
     APPS.lock().unwrap().take()
 }
 
+/// b85: diagnostics produced by a `logs` command (Android), sent once with the next heartbeat (`adoluna_logs`).
+pub fn take_logs() -> Option<Value> {
+    #[cfg(target_os = "android")]
+    if let Ok(s) = scrap::android::call_main_service_get_by_name("adoluna_logs") {
+        if let Ok(v) = serde_json::from_str::<Value>(&s) {
+            if v.is_object() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
 /// Put an app list back if the heartbeat carrying it failed.
 pub fn restore_apps(v: Value) {
     let mut g = APPS.lock().unwrap();

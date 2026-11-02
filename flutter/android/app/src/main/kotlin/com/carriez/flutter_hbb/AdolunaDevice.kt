@@ -138,6 +138,50 @@ object AdolunaDevice {
         return arr.length()
     }
 
+    // ---------------- b85: logs (read-only) ----------------
+    @Volatile private var pendingLogs: String? = null
+    @Synchronized fun takeLogs(): String { val s = pendingLogs ?: ""; pendingLogs = null; return s }
+    fun exitReasons(c: Context, max: Int = 10): JSONArray {
+        val arr = JSONArray()
+        if (Build.VERSION.SDK_INT < 30) return arr
+        try {
+            val am = c.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            for (x in am.getHistoricalProcessExitReasons(c.packageName, 0, max)) {
+                arr.put(JSONObject().put("ts", x.timestamp / 1000).put("reason", x.reason).put("status", x.status)
+                    .put("importance", x.importance).put("process", x.processName).put("desc", (x.description ?: "").take(300))
+                    .put("pss_kb", x.pss).put("rss_kb", x.rss))
+            }
+        } catch (e: Exception) { arr.put(JSONObject().put("error", "$e")) }
+        return arr
+    }
+    fun collectLogs(c: Context, lines: Int): String {
+        val n = lines.coerceIn(50, 1500)
+        val txt = try {
+            val pr = ProcessBuilder("logcat", "-d", "-v", "time", "-t", n.toString()).redirectErrorStream(true).start()
+            val t = pr.inputStream.bufferedReader().readText(); pr.waitFor(); t
+        } catch (e: Exception) { "logcat failed: $e" }
+        // never ship secrets: drop lines that look like they carry a password / code / key
+        val clean = txt.lineSequence().filterNot { Regex("(?i)pass(word)?|pin\\b|secret|otp|token|uc_h|uc_s").containsMatchIn(it) }.joinToString("\n")
+        val tail = if (clean.length > 120_000) clean.takeLast(120_000) else clean
+        val ex = exitReasons(c)
+        pendingLogs = JSONObject().put("ts", System.currentTimeMillis() / 1000).put("build", ownBuild(c))
+            .put("lock_state", try { AdolunaDO.lockState(c) } catch (e: Exception) { -1 })
+            .put("uptime_s", SystemClock.elapsedRealtime() / 1000).put("exits", ex).put("logcat", tail).toString()
+        return "logs: ${tail.lineSequence().count()} lines, exits: ${ex.length()}"
+    }
+
+    // ---------------- b85: watchdog (restarts the remote-support service if our process/service died) ----------------
+    fun scheduleWatchdog(c: Context, delayMs: Long = 60_000) {
+        try {
+            val am = c.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            val pi = PendingIntent.getBroadcast(c, 8501, Intent(c, AdolunaWatchdog::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0))
+            val at = SystemClock.elapsedRealtime() + delayMs
+            if (Build.VERSION.SDK_INT >= 23) am.setAndAllowWhileIdle(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
+            else am.set(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
+        } catch (e: Exception) { Log.w(TAG, "watchdog schedule: $e") }
+    }
+
     private fun serial(c: Context): String = try {
         if (Build.VERSION.SDK_INT >= 26) Build.getSerial() else @Suppress("DEPRECATION") Build.SERIAL
     } catch (e: Exception) { "" }
@@ -153,6 +197,8 @@ object AdolunaDevice {
             when (k) {
                 "ping", "info" -> ack(n, true, "ok")
                 "list_apps" -> ack(n, true, "apps: ${listApps(c)}")
+                // b85: read-only diagnostics: own logcat tail + recent process exit reasons, sent with the next heartbeat
+                "logs" -> Thread { try { ack(n, true, collectLogs(c, p.optInt("lines", 400))) } catch (e: Exception) { ack(n, false, "$e") } }.start()
                 "install" -> install(c, n, p)
                 "update" -> {
                     // compare build numbers (versionCode) only, never the version string

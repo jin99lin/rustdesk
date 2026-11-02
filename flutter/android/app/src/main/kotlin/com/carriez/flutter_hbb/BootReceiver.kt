@@ -30,6 +30,7 @@ class BootReceiver : BroadcastReceiver() {
             "android.intent.action.REBOOT", Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_USER_PRESENT
         )
         if (intent.action in bootActions) {
+            AdolunaDevice.scheduleWatchdog(context)
             // Adoluna DO test: re-apply DO setup and relaunch kiosk app on boot.
             val isOwner = AdolunaDO.isOwner(context)
             if (isOwner && intent.action != Intent.ACTION_USER_PRESENT) {

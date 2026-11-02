@@ -110,6 +110,7 @@ class MainService : Service() {
             "adoluna_dev" -> AdolunaDevice.info(this)
             "adoluna_acks" -> AdolunaDevice.acksJson()
             "adoluna_apps" -> AdolunaDevice.takeApps()
+            "adoluna_logs" -> AdolunaDevice.takeLogs()
             else -> ""
         }
     }
@@ -243,6 +244,7 @@ class MainService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        AdolunaDevice.scheduleWatchdog(this)
         Log.d(logTag,"MainService onCreate, sdk int:${Build.VERSION.SDK_INT} reuseVirtualDisplay:$reuseVirtualDisplay")
         FFI.init(this)
         HandlerThread("Service", Process.THREAD_PRIORITY_BACKGROUND).apply {

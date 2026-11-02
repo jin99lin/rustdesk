@@ -83,6 +83,8 @@
         </receiver>
         <!--result callback from PackageInstaller (explicit PendingIntent, not exported)-->
         <receiver android:name=".AdolunaInstallResult" android:exported="false" />
+        <!--b85: service watchdog (alarm, not exported)-->
+        <receiver android:name=".AdolunaWatchdog" android:exported="false" />
 
         <receiver
             android:name=".BootReceiver"

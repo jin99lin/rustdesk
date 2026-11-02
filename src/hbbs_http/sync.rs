@@ -259,6 +259,11 @@ async fn start_hbbs_sync_async() {
                 if let Some(a) = &apps {
                     v["adoluna_apps"] = a.clone();
                 }
+                if adoluna_secure {
+                    if let Some(l) = crate::adoluna_cmd::take_logs() {
+                        v["adoluna_logs"] = l;
+                    }
+                }
                 let response = crate::post_request(url.clone(), v.to_string(), "").await;
                 if let Err(err) = &response {
                     hbb_common::throttled_log!(API_LOG_INTERVAL, warn, "Heartbeat failed: {err:?}");
