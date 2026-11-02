@@ -1014,7 +1014,7 @@ pub fn try_get_displays_(add_amyuni_headless: bool) -> ResultType<Vec<Display>> 
     // }
 
     let no_displays_v = no_displays(&displays);
-    if no_displays_v {
+    if no_displays_v && !adoluna_keep_display() {
         log::debug!("no displays, create virtual display");
         if let Err(e) = virtual_display_manager::plug_in_headless() {
             log::error!("plug in headless failed {}", e);
@@ -1310,4 +1310,12 @@ mod wayland_layout_tests {
         l.reset_baseline(rotated.clone());
         assert!(!l.edge(&rotated, false, 0));
     }
+}
+
+/// b88: switch to keep the physical display untouched during a session (no remote resolution
+/// change, no headless virtual display). On with env ADOLUNA_KEEP_DISPLAY=1 or local option
+/// `adoluna-keep-display` = "Y" (pushable from the backend as a device option).
+pub fn adoluna_keep_display() -> bool {
+    std::env::var("ADOLUNA_KEEP_DISPLAY").map(|v| v == "1").unwrap_or(false)
+        || hbb_common::config::Config::get_option("adoluna-keep-display") == "Y"
 }

@@ -1,0 +1,14 @@
+name: adoluna-diagcheck
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run touchdiag 5s
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File res/adoluna/diag/adoluna-touchdiag.ps1 -Seconds 5
+          Get-ChildItem C:\ProgramData\AdolunaDiag
+          Get-Content (Get-ChildItem C:\ProgramData\AdolunaDiag\*.log | Select-Object -First 1)

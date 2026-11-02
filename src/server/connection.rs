@@ -4795,6 +4795,12 @@ impl Connection {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn change_resolution(&mut self, d: Option<usize>, r: &Resolution) {
+        // b88: touch kiosks (eGalax etc.) calibrate to the panel's native mode; a remote-driven
+        // resolution change can leave local touch dead until disconnect restores it.
+        if crate::server::display_service::adoluna_keep_display() {
+            log::info!("adoluna: keep-display on, ignoring remote resolution change {}x{}", r.width, r.height);
+            return;
+        }
         if self.keyboard {
             if let Ok(displays) = display_service::try_get_displays() {
                 let display_idx = d.unwrap_or(self.display_idx);
