@@ -20,7 +20,7 @@ env:
 
 jobs:
   notary-check:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     steps:
       - name: Verify notarytool credentials before the long build
         env:
@@ -66,11 +66,11 @@ jobs:
   build:
     needs: [bridge, notary-check]
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         job:
           - { target: x86_64-apple-darwin, os: macos-15-intel, arch: x86_64, extra: "" }
-          - { target: aarch64-apple-darwin, os: macos-15, arch: aarch64, extra: "--screencapturekit" }
+          - { target: aarch64-apple-darwin, os: macos-14, arch: aarch64, extra: "--screencapturekit" }
     runs-on: ${{ matrix.job.os }}
     steps:
       - uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -146,7 +146,10 @@ jobs:
 
   universal:
     needs: build
-    runs-on: macos-15
+    # b88: macos-15 arm64 capacity starved; run on Intel and fall back to x86_64-only if arm64 failed
+    if: ${{ !cancelled() }}
+    timeout-minutes: 150
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -155,6 +158,11 @@ jobs:
           merge-multiple: true
       - name: Merge into universal app (lipo every Mach-O that differs)
         run: |
+          test -f app-x86_64.zip || { echo "x86_64 slice missing"; exit 1; }
+          if [ ! -f app-aarch64.zip ]; then
+            echo "arm64 slice missing -> x86_64-only dmg"; ditto -x -k app-x86_64.zip .; echo "SLICE=x86_64" >> "$GITHUB_ENV"
+          else
+          echo "SLICE=universal" >> "$GITHUB_ENV"
           mkdir arm x64
           ditto -x -k app-aarch64.zip arm && ditto -x -k app-x86_64.zip x64
           cp -R "arm/${APP}" "${APP}"
@@ -167,6 +175,7 @@ jobs:
             fi
           done
           cd ..
+          fi
           lipo -info "${APP}/Contents/MacOS/AdolunaSupport" "${APP}/Contents/Frameworks/liblibrustdesk.dylib" || true
           # Adoluna: Finder/Dock/Launchpad show "Adoluna Support" while the bundle path stays AdolunaSupport.app
           for l in en zh-Hans zh_CN Base; do
@@ -225,7 +234,7 @@ jobs:
           brew install create-dmg
           CREATE_DMG="$(readlink -f "$(command -v create-dmg)")"
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
-          DMG="adoluna-support-${VERSION}-universal.dmg"
+          DMG="adoluna-support-${VERSION}-${SLICE}.dmg"
           create-dmg --volname "Adoluna Support" --icon "${APP}" 200 190 --hide-extension "${APP}" --window-size 800 400 --app-drop-link 600 185 "$DMG" "${APP}"
           echo "DMG=$DMG" >> "$GITHUB_ENV"
       - name: Sign, notarize and staple dmg
