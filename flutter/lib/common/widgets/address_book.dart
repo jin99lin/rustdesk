@@ -194,6 +194,7 @@ class _AddressBookState extends State<AddressBook> {
         final selected = cur == key;
         return InkWell(
           onTap: () => pick(key),
+          hoverColor: Theme.of(context).colorScheme.primary.withOpacity(0.08),
           child: Container(
             padding: EdgeInsets.fromLTRB(indent, 8, 10, 8),
             color: selected
@@ -239,20 +240,23 @@ class _AddressBookState extends State<AddressBook> {
                 if (p.online) mOn++;
               }
             }
+            // b87: heading looks clickable (dark bold, hover highlight, selected blue like store rows)
+            final primary = Theme.of(context).colorScheme.primary;
             return InkWell(
               onTap: () => pick(mk),
+              hoverColor: primary.withOpacity(0.08),
               child: Container(
-                padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
-                color: msel
-                    ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
-                    : null,
+                padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+                color: msel ? primary.withOpacity(0.15) : null,
                 child: Row(children: [
                   Expanded(
                       child: Text(m,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                              fontSize: 12,
-                              color: msel ? null : Colors.grey,
-                              fontWeight: FontWeight.bold))),
+                              fontSize: 13,
+                              color: Theme.of(context).textTheme.bodyLarge?.color,
+                              fontWeight: FontWeight.w700))),
                   Text('$mOn/$mAll',
                       style: TextStyle(fontSize: 11, color: Colors.grey)),
                 ]),

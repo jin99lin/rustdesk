@@ -1314,6 +1314,8 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
     }
     match evt_type {
         MOUSE_TYPE_MOVE => {
+            #[cfg(windows)]
+            adoluna_btn_guard::touch();
             // Switching back to absolute movement implicitly disables relative mouse mode.
             set_relative_mouse_active(conn, false);
             // On Wayland with uinput, the client sends coordinates in the layout it was
@@ -1375,9 +1377,13 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
         MOUSE_TYPE_DOWN => match buttons {
             MOUSE_BUTTON_LEFT => {
                 allow_err!(en.mouse_down(MouseButton::Left));
+                #[cfg(windows)]
+                adoluna_btn_guard::held(1);
             }
             MOUSE_BUTTON_RIGHT => {
                 allow_err!(en.mouse_down(MouseButton::Right));
+                #[cfg(windows)]
+                adoluna_btn_guard::held(2);
             }
             MOUSE_BUTTON_WHEEL => {
                 allow_err!(en.mouse_down(MouseButton::Middle));
@@ -1393,9 +1399,13 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
         MOUSE_TYPE_UP => match buttons {
             MOUSE_BUTTON_LEFT => {
                 en.mouse_up(MouseButton::Left);
+                #[cfg(windows)]
+                adoluna_btn_guard::released(1);
             }
             MOUSE_BUTTON_RIGHT => {
                 en.mouse_up(MouseButton::Right);
+                #[cfg(windows)]
+                adoluna_btn_guard::released(2);
             }
             MOUSE_BUTTON_WHEEL => {
                 en.mouse_up(MouseButton::Middle);
@@ -2862,5 +2872,39 @@ mod peer_abs_sample_tests {
         drop(peer);
         mover.join().unwrap();
         assert_eq!(last_peer_abs_sample(), None, "the move of this process came last");
+    }
+}
+
+
+/// b87 (Adoluna): a remote mouse button left "down" (e.g. the up event was lost when the technician's
+/// pointer left the remote view) keeps the system button state down. Windows then ignores the
+/// down/up promoted from the local touchscreen (eGalax on Domoishi LC POS: touch dead while connected,
+/// fine again after disconnect, when buttons are released). Release a remote-held button if no remote
+/// mouse event arrived for 1.5 s.
+#[cfg(windows)]
+mod adoluna_btn_guard {
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::SeqCst};
+    static HELD: AtomicU32 = AtomicU32::new(0);
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    fn now_ms() -> u64 { hbb_common::get_time() as u64 }
+    pub fn touch() { LAST.store(now_ms(), SeqCst); }
+    pub fn released(b: u32) { HELD.fetch_and(!b, SeqCst); touch(); }
+    pub fn held(b: u32) {
+        HELD.fetch_or(b, SeqCst); touch();
+        if STARTED.swap(true, SeqCst) { return; }
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let h = HELD.load(SeqCst);
+            if h == 0 || now_ms().saturating_sub(LAST.load(SeqCst)) < 1500 { continue; }
+            HELD.store(0, SeqCst);
+            if let Ok(mut en) = super::ENIGO.lock() {
+                use hbb_common::log;
+                use enigo::{MouseButton, MouseControllable};
+                if h & 1 != 0 { en.mouse_up(MouseButton::Left); }
+                if h & 2 != 0 { en.mouse_up(MouseButton::Right); }
+                log::info!("adoluna: released remote-held mouse button(s) {h} after idle");
+            }
+        });
     }
 }

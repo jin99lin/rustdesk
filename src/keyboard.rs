@@ -145,6 +145,16 @@ pub mod client {
         }
     }
 
+    /// b87 (Adoluna): forget the grab owner (used when macOS focus moved away from us).
+    #[allow(dead_code)]
+    pub fn adoluna_clear_grab_owner() {
+        if let Ok(mut gs) = GRAB_STATE.try_lock() {
+            gs.owner = None;
+            gs.last_grab = None;
+            gs.deferred_pending = false;
+        }
+    }
+
     pub fn start_grab_loop() {
         let mut lock = IS_GRAB_STARTED.lock().unwrap();
         if *lock {
@@ -627,6 +637,16 @@ fn start_grab_loop() {
                 return None;
             }
 
+            // b87 (Adoluna): on macOS the grab was only released on PointerExit; after Cmd+Tab or closing
+            // the session window the hook stayed on and the local keyboard went dead. Release it as soon
+            // as we are no longer the active app.
+            #[cfg(target_os = "macos")]
+            if KEYBOARD_HOOKED.load(Ordering::SeqCst) && !crate::platform::macos::adoluna_app_is_active() {
+                KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
+                client::adoluna_clear_grab_owner();
+                log::info!("[grab] released: app no longer active");
+                return Some(event);
+            }
             let res = if KEYBOARD_HOOKED.load(Ordering::SeqCst) {
                 client::process_event(&get_keyboard_mode(), &event, None);
                 if is_press {

@@ -2074,3 +2074,16 @@ fn get_bundle_id() -> Option<String> {
         Some(bundle_id_str)
     }
 }
+
+/// b87 (Adoluna): whether our app is the active (frontmost) app. Used by the keyboard grab so a
+/// Map/Translate-mode capture never keeps eating local keys after the session window lost focus or closed.
+pub fn adoluna_app_is_active() -> bool {
+    unsafe {
+        let app: id = msg_send![class!(NSRunningApplication), currentApplication];
+        if app.is_null() {
+            return true;
+        }
+        let a: BOOL = msg_send![app, isActive];
+        a == YES
+    }
+}

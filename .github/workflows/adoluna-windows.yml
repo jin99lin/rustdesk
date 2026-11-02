@@ -70,6 +70,14 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+      - name: Check kiosk keyboard hook compiles (b87)
+        shell: powershell
+        run: |
+          $s = Get-Content src/adoluna_kiosk.ps1 -Raw
+          $m = [regex]::Match($s, "(?s)-TypeDefinition @'\r?\n(.*?)\r?\n'@")
+          if (-not $m.Success) { throw 'hook block not found' }
+          Add-Type -Language CSharp -TypeDefinition $m.Groups[1].Value
+          Write-Host 'kiosk hook OK'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: bridge-artifact

@@ -14,6 +14,49 @@ Add-Type -Name W -Namespace A -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 '@
+# b87: low-level keyboard hook in this (user) session, active only while locked. Blocks the shell
+# shortcuts immediately (the scancode map / NoWinKeys policies only apply after the next sign-in).
+# Injected keys (our own remote session) are never blocked.
+Add-Type -Language CSharp -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Diagnostics;
+namespace A {
+public static class KH {
+  public static volatile bool Active = false;
+  delegate IntPtr P(int n, IntPtr w, IntPtr l);
+  static P keep; static IntPtr h = IntPtr.Zero;
+  [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, P cb, IntPtr mod, uint tid);
+  [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int n, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int k);
+  [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string m);
+  [StructLayout(LayoutKind.Sequential)] struct K { public uint vk, sc, flags, time; public IntPtr extra; }
+  static bool Down(int k) { return (GetAsyncKeyState(k) & 0x8000) != 0; }
+  public static void Install() {
+    if (h != IntPtr.Zero) return;
+    keep = Cb;
+    h = SetWindowsHookEx(13, keep, GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName), 0);
+  }
+  static IntPtr Cb(int n, IntPtr w, IntPtr l) {
+    try {
+      if (n >= 0 && Active) {
+        K k = (K)Marshal.PtrToStructure(l, typeof(K));
+        bool injected = (k.flags & 0x10) != 0;
+        if (!injected) {
+          uint v = k.vk; bool alt = (k.flags & 0x20) != 0; bool ctrl = Down(0x11);
+          bool block =
+            v == 0x5B || v == 0x5C || v == 0x5D ||            // Win L/R, Apps (menu)
+            v == 0x7A || v == 0x7B ||                         // F11, F12
+            (alt && (v == 0x09 || v == 0x1B || v == 0x73 || v == 0x20)) || // Alt+Tab/Esc/F4/Space
+            (ctrl && v == 0x1B) ||                            // Ctrl+Esc, Ctrl+Shift+Esc
+            v == 0xA6 || v == 0xA7 || v == 0xAA || v == 0xAC || v == 0xB4 || v == 0xB5 || v == 0xB6 || v == 0xB7; // browser/launch keys
+          if (block) return (IntPtr)1;
+        }
+      }
+    } catch { }
+    return CallNextHookEx(h, n, w, l);
+  }
+}}
+'@
+[A.KH]::Install()
 $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 $zh = [Globalization.CultureInfo]::CurrentUICulture.Name -like 'zh*'
 function L($c, $e) { if ($zh) { $c } else { $e } }
@@ -113,8 +156,9 @@ $tm = New-Object Windows.Forms.Timer; $tm.Interval = 1000
 $tm.Add_Tick({
   $script:tick++
   # pause the foreground watchdog while the unlock dialog is open so it can't steal focus
-  if ($script:dlg) { return }
+  if ($script:dlg) { [A.KH]::Active = $true; return }
   $u = PauseUntil; $n = Now
+  [A.KH]::Active = -not ($u -gt $n)
   if ($u -gt $n) {
     Taskbar 5; $s = $u - $n
     $lb.Text = (L ('剩余 {0:00}:{1:00} · 锁定' -f [Math]::Floor($s / 60), ($s % 60)) ('{0:00}:{1:00} left · Lock' -f [Math]::Floor($s / 60), ($s % 60)))
@@ -132,6 +176,8 @@ $tm.Add_Tick({
   $fg = [A.W]::GetForegroundWindow(); $fp = 0; [A.W]::GetWindowThreadProcessId($fg, [ref]$fp) | Out-Null
   $fn = (Get-Process -Id $fp).ProcessName
   if ($fn -eq $Name) { return }
+  # b87: Start / search / Task View / Action Center that slipped through: dismiss them
+  if (@('StartMenuExperienceHost', 'SearchHost', 'SearchApp', 'ShellExperienceHost', 'SearchUI') -contains $fn) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}') }
   if ($fg -ne [IntPtr]::Zero -and $fn -and @($Own, 'explorer', 'powershell', 'LockApp', 'consent', 'LogonUI') -notcontains $fn) { [A.W]::ShowWindow($fg, 6) | Out-Null }
   $w = ($pos | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } | Select-Object -First 1).MainWindowHandle
   if ($w) { if ([A.W]::IsIconic($w)) { [A.W]::ShowWindow($w, 9) | Out-Null }; [A.W]::SwitchToThisWindow($w, $true) }
