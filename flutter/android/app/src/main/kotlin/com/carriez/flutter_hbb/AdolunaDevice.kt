@@ -253,6 +253,7 @@ object AdolunaDevice {
                 "logs" -> Thread { try { ack(n, true, collectLogs(c, p.optInt("lines", 400))) } catch (e: Exception) { ack(n, false, "$e") } }.start()
                 "install" -> install(c, n, p)
                 "uninstall" -> uninstall(c, n, p)
+                "push_file" -> pushFile(c, n, p)
                 "update" -> {
                     // compare build numbers (versionCode) only, never the version string
                     val want = p.optLong("build", 0L); val own = ownBuild(c)
@@ -320,6 +321,93 @@ object AdolunaDevice {
                 ack(n, true, if (owner) "installing silently" else "install prompt shown to user")
             } catch (e: Exception) { ack(n, false, "install failed: $e") }
         }.start()
+    }
+
+    // ---------------- b95: push_file (zip package: save only, never extract / install) ----------------
+    // Saves to Download/Adoluna/ (MediaStore on Android 10+). Name clash -> "name (1).zip", "name (2).zip".
+    // Ack: "saved: Download/Adoluna/<name>" or "save failed: <reason>".
+    private fun safeFileName(raw: String): String {
+        var s = raw.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().trim('.').take(150)
+        if (s.isEmpty()) s = "file.zip"
+        if (!s.lowercase().endsWith(".zip")) s += ".zip"
+        return s
+    }
+
+    private fun pushFile(c: Context, n: Long, p: JSONObject) {
+        val url = p.optString("url"); val want = p.optString("sha256").lowercase()
+        if (url.isEmpty() || want.length != 64) { ack(n, false, "save failed: url and sha256 required"); return }
+        val name = safeFileName(p.optString("name"))
+        val size = p.optLong("size", 0L)
+        Thread {
+            val tmp = File(c.cacheDir, "adoluna-file-$n.part")
+            try {
+                if (size > 0) try {
+                    val free = StatFs(Environment.getExternalStorageDirectory().path).availableBytes
+                    if (free < size + 20L * 1024 * 1024) { ack(n, false, "save failed: no space"); return@Thread }
+                } catch (_: Exception) {}
+                try { URL(url).openStream().use { i -> tmp.outputStream().use { o -> i.copyTo(o) } } }
+                catch (e: Exception) { tmp.delete(); ack(n, false, "save failed: download failed: ${e.javaClass.simpleName} ${e.message ?: ""}".take(300)); return@Thread }
+                val md = MessageDigest.getInstance("SHA-256")
+                tmp.inputStream().use { i -> val buf = ByteArray(65536); while (true) { val r = i.read(buf); if (r <= 0) break; md.update(buf, 0, r) } }
+                if (md.digest().joinToString("") { "%02x".format(it) } != want) { tmp.delete(); ack(n, false, "save failed: sha256 mismatch"); return@Thread }
+                val saved = if (Build.VERSION.SDK_INT >= 29) saveQ(c, tmp, name) else saveLegacy(tmp, name)
+                tmp.delete()
+                ack(n, true, "saved: $saved")
+            } catch (e: Exception) {
+                tmp.delete()
+                val m = "${e.message ?: e}"
+                ack(n, false, "save failed: " + (if (m.contains("ENOSPC") || m.contains("No space", true)) "no space" else m).take(300))
+            }
+        }.start()
+    }
+
+    private fun splitName(name: String): Pair<String, String> {
+        val i = name.lastIndexOf('.'); return if (i > 0) Pair(name.substring(0, i), name.substring(i)) else Pair(name, "")
+    }
+
+    @android.annotation.TargetApi(29)
+    private fun saveQ(c: Context, src: File, name: String): String {
+        val cr = c.contentResolver
+        val coll = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val rel = Environment.DIRECTORY_DOWNLOADS + "/Adoluna/"
+        // names we can see (files this app saved earlier); MediaStore also de-duplicates on its own
+        val taken = HashSet<String>()
+        try {
+            cr.query(coll, arrayOf(android.provider.MediaStore.MediaColumns.DISPLAY_NAME),
+                android.provider.MediaStore.MediaColumns.RELATIVE_PATH + "=?", arrayOf(rel), null)?.use { cu ->
+                while (cu.moveToNext()) cu.getString(0)?.let { taken.add(it.lowercase()) }
+            }
+        } catch (_: Exception) {}
+        val (base, ext) = splitName(name)
+        var pick = name; var i = 1
+        while (pick.lowercase() in taken && i < 1000) { pick = "$base ($i)$ext"; i++ }
+        val v = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, pick)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, rel)
+            put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = cr.insert(coll, v) ?: throw Exception("cannot create file in Download/Adoluna")
+        try {
+            (cr.openOutputStream(uri) ?: throw Exception("cannot open output")).use { o -> src.inputStream().use { it.copyTo(o) } }
+            cr.update(uri, android.content.ContentValues().apply { put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        } catch (e: Exception) { try { cr.delete(uri, null, null) } catch (_: Exception) {}; throw e }
+        var real = pick
+        try {
+            cr.query(uri, arrayOf(android.provider.MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { cu -> if (cu.moveToFirst()) cu.getString(0)?.let { real = it } }
+        } catch (_: Exception) {}
+        return "Download/Adoluna/$real"
+    }
+
+    @Suppress("DEPRECATION")
+    private fun saveLegacy(src: File, name: String): String {
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Adoluna")
+        if (!dir.isDirectory && !dir.mkdirs()) throw Exception("Android 9 or older: no storage permission for Download/Adoluna")
+        val (base, ext) = splitName(name)
+        var f = File(dir, name); var i = 1
+        while (f.exists() && i < 1000) { f = File(dir, "$base ($i)$ext"); i++ }
+        src.inputStream().use { inp -> f.outputStream().use { inp.copyTo(it) } }
+        return "Download/Adoluna/${f.name}"
     }
 
     fun onInstallDone(c: Context) {
