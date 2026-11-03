@@ -217,6 +217,14 @@ class AdolunaInstallResult : BroadcastReceiver() {
                 val st = i.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)
                 Log.i(TAG, "install result status=$st msg=${i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
                 val n = i.getLongExtra("n", 0)
+                val un = i.getStringExtra("un")
+                if (un != null) {
+                    if (st == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                        @Suppress("DEPRECATION") val confirm = i.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                        confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let { try { c.startActivity(it) } catch (e: Exception) { AdolunaDevice.ack(n, false, "cannot show confirm: $e") } }
+                    } else AdolunaDevice.onUninstallDone(c, n, un, st, i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "")
+                    return
+                }
                 if (n > 0 && st != PackageInstaller.STATUS_PENDING_USER_ACTION)
                     AdolunaDevice.ack(n, st == PackageInstaller.STATUS_SUCCESS, "install result $st ${i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""}")
                 if (st != PackageInstaller.STATUS_PENDING_USER_ACTION) AdolunaDevice.onInstallDone(c)

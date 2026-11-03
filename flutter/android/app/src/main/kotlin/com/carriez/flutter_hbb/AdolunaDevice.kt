@@ -134,8 +134,60 @@ object AdolunaDevice {
             if (total < 400_000) { val ic = iconB64(c, ri); if (ic.isNotEmpty()) { o.put("icon", ic); total += ic.length } }
             arr.put(o)
         }
-        pendingApps = JSONObject().put("hash", appsHash(c)).put("apps", arr).toString()
+        val o = JSONObject().put("hash", appsHash(c)).put("apps", arr)
+        try { o.put("inv", inventory(c)) } catch (e: Exception) { Log.w(TAG, "inventory: $e") }
+        pendingApps = o.toString()
         return arr.length()
+    }
+
+    // ---------------- b93: full installed-app inventory (for the backend's 已装应用 card) ----------------
+    fun inventory(c: Context): JSONArray {
+        val pm = c.packageManager
+        val home = try { pm.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)?.activityInfo?.packageName } catch (_: Exception) { null }
+        val admins = try { AdolunaDO.dpm(c).activeAdmins?.map { it.packageName }?.toSet() ?: emptySet() } catch (_: Exception) { emptySet<String>() }
+        @Suppress("DEPRECATION") val pkgs = pm.getInstalledPackages(0)
+        val arr = JSONArray()
+        for (pi in pkgs.sortedBy { it.packageName }.take(700)) {
+            val ai = pi.applicationInfo ?: continue
+            val sys = (ai.flags and (android.content.pm.ApplicationInfo.FLAG_SYSTEM or android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
+            var size = 0L
+            try { size = File(ai.sourceDir).length(); ai.splitSourceDirs?.forEach { size += File(it).length() } } catch (_: Exception) {}
+            val o = JSONObject().put("name", (try { ai.loadLabel(pm).toString() } catch (_: Exception) { pi.packageName }).take(80))
+                .put("pkg", pi.packageName).put("ver", (pi.versionName ?: "").take(40)).put("size", size).put("it", pi.firstInstallTime / 1000)
+            if (sys) o.put("sys", true)
+            if (pi.packageName == home) o.put("home", true)
+            if (pi.packageName in admins) o.put("admin", true)
+            arr.put(o)
+        }
+        return arr
+    }
+
+    // ---------------- b93: uninstall (silent on Device Owner, otherwise the merchant confirms on the device) ----------------
+    private fun uninstall(c: Context, n: Long, p: JSONObject) {
+        val pkg = p.optString("pkg")
+        if (pkg.isEmpty() || !Regex("^[A-Za-z0-9_.]{2,200}$").matches(pkg)) { ack(n, false, "bad package"); return }
+        if (pkg == c.packageName) { ack(n, false, "refusing to uninstall self"); return }
+        try { c.packageManager.getPackageInfo(pkg, 0) } catch (e: Exception) { ack(n, false, "not installed: $pkg"); try { listApps(c) } catch (_: Exception) {}; return }
+        val owner = AdolunaDO.isOwner(c)
+        if (owner) {
+            try { AdolunaDO.dpm(c).clearUserRestriction(AdolunaDO.admin(c), UserManager.DISALLOW_UNINSTALL_APPS) } catch (_: Exception) {}
+            try { AdolunaDO.dpm(c).setUninstallBlocked(AdolunaDO.admin(c), pkg, false) } catch (_: Exception) {}
+        }
+        val cb = Intent(c, AdolunaInstallResult::class.java).setAction(ACT_INSTALL_RESULT).putExtra("n", n).putExtra("un", pkg)
+        var fl = PendingIntent.FLAG_UPDATE_CURRENT
+        if (Build.VERSION.SDK_INT >= 31) fl = fl or PendingIntent.FLAG_MUTABLE
+        c.packageManager.packageInstaller.uninstall(pkg, PendingIntent.getBroadcast(c, (n % 100000).toInt() + 200000, cb, fl).intentSender)
+        // the ack comes from AdolunaInstallResult (success / failure / merchant cancelled)
+    }
+    fun onUninstallDone(c: Context, n: Long, pkg: String, st: Int, msg: String) {
+        val gone = try { c.packageManager.getPackageInfo(pkg, 0); false } catch (_: Exception) { true }
+        if (n > 0) when {
+            st == PackageInstaller.STATUS_SUCCESS || gone -> ack(n, true, "uninstalled $pkg")
+            st == PackageInstaller.STATUS_FAILURE_ABORTED -> ack(n, false, "cancelled on device")
+            else -> ack(n, false, "uninstall failed ($st) ${msg.take(160)}")
+        }
+        onInstallDone(c)
+        try { listApps(c) } catch (_: Exception) {}
     }
 
     // ---------------- b85: logs (read-only) ----------------
@@ -200,6 +252,7 @@ object AdolunaDevice {
                 // b85: read-only diagnostics: own logcat tail + recent process exit reasons, sent with the next heartbeat
                 "logs" -> Thread { try { ack(n, true, collectLogs(c, p.optInt("lines", 400))) } catch (e: Exception) { ack(n, false, "$e") } }.start()
                 "install" -> install(c, n, p)
+                "uninstall" -> uninstall(c, n, p)
                 "update" -> {
                     // compare build numbers (versionCode) only, never the version string
                     val want = p.optLong("build", 0L); val own = ownBuild(c)
