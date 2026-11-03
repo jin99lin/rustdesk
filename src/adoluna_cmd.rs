@@ -253,6 +253,9 @@ fn execute(c: &Cmd) -> ResultType<Option<String>> {
         "uninstall" => desktop::win_uninstall(c.n, &c.p),
         "reboot" => desktop::reboot(),
         "install" => desktop::install(&c.p),
+        // b95: zip file package - save only to C:\Adoluna\Files (never extract / run)
+        #[cfg(windows)]
+        "push_file" => desktop::win_push_file(c.n, &c.p),
         "update" => desktop::update(&c.p),
         #[cfg(windows)]
         "kiosk_lock" => desktop::win_kiosk_lock(&c.p),
@@ -456,6 +459,72 @@ mod desktop {
             hbb_common::bail!("sha256 mismatch");
         }
         Ok(path)
+    }
+
+    /// b95: push_file. Download + sha256 check (same as install), then save into C:\Adoluna\Files\
+    /// (created on first use; BUILTIN\Users get modify rights because the service runs as SYSTEM).
+    /// Never extracts or runs anything. Clash -> "name (1).zip". Ack "saved: <full path>" / "save failed: <reason>".
+    #[cfg(windows)]
+    pub fn win_push_file(n: i64, p: &Value) -> ResultType<Option<String>> {
+        let fail = |m: String| -> ResultType<Option<String>> { hbb_common::bail!("save failed: {}", m) };
+        let raw = p["name"].as_str().unwrap_or_default();
+        let mut name: String = raw
+            .chars()
+            .map(|c| if c.is_control() || "\\/:*?\"<>|".contains(c) { '_' } else { c })
+            .collect::<String>()
+            .trim()
+            .trim_matches('.')
+            .chars()
+            .take(150)
+            .collect();
+        if name.is_empty() {
+            name = "file.zip".into();
+        }
+        if !name.to_lowercase().ends_with(".zip") {
+            name.push_str(".zip");
+        }
+        let stem_up = name.split('.').next().unwrap_or("").to_uppercase();
+        if ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "LPT1", "LPT2", "LPT3"].contains(&stem_up.as_str()) {
+            name = format!("_{name}");
+        }
+        let dir = PathBuf::from("C:\\Adoluna\\Files");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return fail(format!("cannot create {}: {e}", dir.display()));
+        }
+        // S-1-5-32-545 = BUILTIN\Users (locale independent); inherited by files saved here
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("icacls")
+            .arg(dir.as_os_str())
+            .args(["/grant", "*S-1-5-32-545:(OI)(CI)M", "/Q"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .status();
+        let mut q = p.clone();
+        q["name"] = json!(format!("adoluna-file-{n}.part"));
+        let tmp = match download(&q) {
+            Ok(t) => t,
+            Err(e) => {
+                let m = e.to_string();
+                return fail(if m.contains("sha256 mismatch") { "sha256 mismatch".into() } else if m.contains("os error 112") { "no space".into() } else { format!("download failed: {m}") });
+            }
+        };
+        let (stem, ext) = match name.rfind('.') {
+            Some(i) if i > 0 => (name[..i].to_owned(), name[i..].to_owned()),
+            _ => (name.clone(), String::new()),
+        };
+        let mut dst = dir.join(&name);
+        let mut i = 1;
+        while dst.exists() && i < 1000 {
+            dst = dir.join(format!("{stem} ({i}){ext}"));
+            i += 1;
+        }
+        let r = std::fs::rename(&tmp, &dst).or_else(|_| std::fs::copy(&tmp, &dst).map(|_| ()));
+        std::fs::remove_file(&tmp).ok();
+        if let Err(e) = r {
+            std::fs::remove_file(&dst).ok();
+            let m = e.to_string();
+            return fail(if m.contains("os error 112") { "no space".into() } else { m });
+        }
+        Ok(Some(format!("saved: {}", dst.display())))
     }
 
     pub fn reboot() -> ResultType<Option<String>> {
