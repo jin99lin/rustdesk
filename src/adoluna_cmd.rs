@@ -249,6 +249,8 @@ fn execute(c: &Cmd) -> ResultType<Option<String>> {
         "ping" => Ok(Some("pong".into())),
         #[cfg(windows)]
         "list_apps" => desktop::win_list_apps(),
+        #[cfg(windows)]
+        "uninstall" => desktop::win_uninstall(c.n, &c.p),
         "reboot" => desktop::reboot(),
         "install" => desktop::install(&c.p),
         "update" => desktop::update(&c.p),
@@ -771,6 +773,77 @@ if(Get-Command Get-StartApps){ foreach($a in Get-StartApps){ $e=$lnk[$a.Name]; i
 foreach($k in $lnk.Keys){ if(-not $seen[$k]){ $r+=[pscustomobject]@{name=$k;aumid='';exe=$lnk[$k]} } }
 $r=$r | ?{ $_.exe -notmatch '\\(uninst|unins000|setup)[^\\]*\.exe$' -and $_.name -notmatch 'Adoluna Support' }"#;
 
+    /// b93: one row per Uninstall key. hive = HKLM64 | HKLM32 | HKU:<SID>; code = key name.
+    #[cfg(windows)]
+    pub const WIN_INV_PS: &str = r#"$ErrorActionPreference='SilentlyContinue'
+$U='\Microsoft\Windows\CurrentVersion\Uninstall'
+$src=@(@('HKLM64',"Registry::HKEY_LOCAL_MACHINE\SOFTWARE$U"),@('HKLM32',"Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node$U"))
+Get-ChildItem 'Registry::HKEY_USERS' | ?{ $_.PSChildName -match '^S-1-5-21-[0-9-]+$' } | %{ $src+=,@("HKU:$($_.PSChildName)","Registry::HKEY_USERS\$($_.PSChildName)\SOFTWARE$U") }
+$o=foreach($s in $src){ Get-ChildItem $s[1] | %{ $p=Get-ItemProperty $_.PSPath
+ if(-not $p.DisplayName -or $p.ParentKeyName -or $p.ReleaseType -match 'Update|Hotfix'){return}
+ $c=$_.PSChildName; $msi=($p.WindowsInstaller -eq 1 -and $c -match '^\{[0-9A-Fa-f-]{36}\}$')
+ $h=[ordered]@{name=[string]$p.DisplayName;code=$c;hive=$s[0];pub=[string]$p.Publisher;ver=[string]$p.DisplayVersion;dt=[string]$p.InstallDate}
+ if($p.EstimatedSize){$h.size=[int64]$p.EstimatedSize*1024}
+ if($p.SystemComponent -eq 1){$h.sys=$true}
+ if($p.QuietUninstallString -or $msi){$h.quiet=$true}
+ if($msi){$h.msi=$true}
+ [pscustomobject]$h } }
+@($o | Select-Object -First 700) | ConvertTo-Json -Compress"#;
+
+    /// b93: uninstall one program the backend picked from our own inventory. The payload only carries
+    /// {code, hive, name, msi}; the command line is re-read from this PC's registry, never sent.
+    #[cfg(windows)]
+    pub fn win_uninstall(n: i64, p: &Value) -> ResultType<Option<String>> {
+        let code = p["code"].as_str().unwrap_or("").to_string();
+        let hive = p["hive"].as_str().unwrap_or("").to_string();
+        let name = p["name"].as_str().unwrap_or("").to_string();
+        if code.is_empty() || code.len() > 200 || code.chars().any(|ch| ch == '\\' || ch == '/' || ch.is_control()) {
+            hbb_common::bail!("bad program id");
+        }
+        let root = match hive.as_str() {
+            "HKLM64" => "HKEY_LOCAL_MACHINE\\SOFTWARE".to_string(),
+            "HKLM32" => "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node".to_string(),
+            h if h.starts_with("HKU:S-1-5-21-") && h[4..].chars().all(|ch| ch.is_ascii_digit() || ch == '-' || ch == 'S') =>
+                format!("HKEY_USERS\\{}\\SOFTWARE", &h[4..]),
+            _ => hbb_common::bail!("bad hive"),
+        };
+        let q = |s: &str| s.replace('\'', "''");
+        let key = format!("Registry::{root}\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{}", q(&code));
+        let msi_ok = p["msi"].as_bool().unwrap_or(false) && code.len() == 38 && code.starts_with('{') && code.ends_with('}')
+            && code[1..37].chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-');
+        let probe = run_ps(&format!("[Console]::OutputEncoding=[Text.Encoding]::UTF8\r\n$p=Get-ItemProperty -LiteralPath '{key}'\r\n@{{name=[string]$p.DisplayName;quiet=[string]$p.QuietUninstallString}} | ConvertTo-Json -Compress"))
+            .map_err(|_| hbb_common::anyhow::anyhow!("not found (already removed?)"))?;
+        let v: Value = serde_json::from_str(probe.trim().trim_start_matches('\u{feff}')).unwrap_or(json!({}));
+        let have = v["name"].as_str().unwrap_or("").to_string();
+        if have.is_empty() { hbb_common::bail!("not found (already removed?)"); }
+        if !name.is_empty() && have != name { hbb_common::bail!("program changed on this PC ({have}); refresh the list"); }
+        let quiet = v["quiet"].as_str().unwrap_or("").trim().to_string();
+        if !msi_ok && quiet.is_empty() { hbb_common::bail!("no silent uninstaller; remove it manually"); }
+        let label = have.clone();
+        std::thread::spawn(move || {
+            use std::os::windows::process::CommandExt;
+            let st = if msi_ok {
+                std::process::Command::new("msiexec").args(["/x", &code, "/qn", "/norestart"]).creation_flags(0x08000000).status()
+            } else {
+                // QuietUninstallString is a full command line written by the vendor's installer
+                std::process::Command::new("cmd.exe").raw_arg(format!("/d /s /c \"{quiet}\"")).creation_flags(0x08000000).status()
+            };
+            let rc = st.as_ref().ok().and_then(|s| s.code()).unwrap_or(-1);
+            // give EXE uninstallers that hand off to a child process time to finish
+            let mut gone = false;
+            for _ in 0..40 {
+                gone = run_ps(&format!("if(Test-Path -LiteralPath '{key}'){{'y'}}else{{'n'}}")).map(|s| s.trim() == "n").unwrap_or(false);
+                if gone || st.is_err() { break; }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+            if gone { super::ack(n, true, format!("uninstalled {label}")); }
+            else if let Err(e) = st { super::ack(n, false, format!("uninstall failed: {e}")); }
+            else { super::ack(n, false, format!("uninstall failed (exit {rc})")); }
+            let _ = win_list_apps();
+        });
+        Ok(None)
+    }
+
     #[cfg(windows)]
     pub fn win_list_apps() -> ResultType<Option<String>> {
         let out = run_ps(&format!("{WIN_APPS_PS}\r\n[Console]::OutputEncoding=[Text.Encoding]::UTF8\r\n$r | Select-Object -First 300 | ConvertTo-Json -Compress"))?;
@@ -789,7 +862,12 @@ $r=$r | ?{ $_.exe -notmatch '\\(uninst|unins000|setup)[^\\]*\.exe$' -and $_.name
         };
         INFO.lock().unwrap().0 = None;
         let hash = info()["apps_hash"].clone();
-        *super::APPS.lock().unwrap() = Some(json!({"hash": hash, "apps": apps, "installed": installed}));
+        // b93: full Add/Remove Programs inventory (HKLM 64/32-bit + every loaded user hive) for the 已装应用 card
+        let inv = run_ps(&format!("[Console]::OutputEncoding=[Text.Encoding]::UTF8\r\n{WIN_INV_PS}")).unwrap_or_default();
+        let inv = match serde_json::from_str::<Value>(inv.trim().trim_start_matches('\u{feff}')).unwrap_or(json!([])) {
+            Value::Array(a) => a, v @ Value::Object(_) => vec![v], _ => vec![],
+        };
+        *super::APPS.lock().unwrap() = Some(json!({"hash": hash, "apps": apps, "installed": installed, "inv": inv}));
         Ok(Some(format!("apps: {n}")))
     }
 
