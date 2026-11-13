@@ -1028,10 +1028,18 @@ pub fn main_set_option(key: String, value: String) {
     }
     #[cfg(target_os = "android")]
     if key.eq(keys::OPTION_ENABLE_KEYBOARD) {
-        crate::ui_cm_interface::switch_permission_all(
-            "keyboard".to_owned(),
-            config::option2bool(&key, &value),
-        );
+        let enable = config::option2bool(&key, &value);
+        // b99 (Adoluna): the mobile UI writes N on every start; don't revoke keyboard (and with it
+        // the controller's clipboard sync) from live sessions while InputService is actually running.
+        let input_open = !enable
+            && scrap::android::call_main_service_get_by_name("adoluna_input_open")
+                .map(|s| s == "true")
+                .unwrap_or(false);
+        if input_open {
+            crate::adoluna_alog("adoluna perm: ignore enable-keyboard=N, input service running");
+        } else {
+            crate::ui_cm_interface::switch_permission_all("keyboard".to_owned(), enable);
+        }
     }
     #[cfg(target_os = "android")]
     if key.eq(keys::OPTION_ENABLE_CLIPBOARD) {

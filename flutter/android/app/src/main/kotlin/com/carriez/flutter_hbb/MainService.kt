@@ -107,6 +107,7 @@ class MainService : Service() {
             "is_start" -> {
                 isStart.toString()
             }
+            "adoluna_input_open" -> InputService.isOpen.toString()
             "adoluna_dev" -> AdolunaDevice.info(this)
             "adoluna_acks" -> AdolunaDevice.acksJson()
             "adoluna_apps" -> AdolunaDevice.takeApps()

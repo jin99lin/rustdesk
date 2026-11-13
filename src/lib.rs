@@ -66,6 +66,25 @@ mod hbbs_http;
 mod adoluna_auth;
 mod adoluna_cmd;
 
+/// b99 (Adoluna): release builds send `log` to a file, not logcat, so the backend "Get logs"
+/// (logcat only) never saw Rust lines. Short diagnostics that must be visible go through this.
+#[cfg(target_os = "android")]
+pub fn adoluna_alog(msg: &str) {
+    log::info!("{}", msg);
+    extern "C" {
+        fn __android_log_write(
+            prio: std::os::raw::c_int,
+            tag: *const std::os::raw::c_char,
+            text: *const std::os::raw::c_char,
+        ) -> std::os::raw::c_int;
+    }
+    if let Ok(t) = std::ffi::CString::new(msg.replace('\0', " ")) {
+        unsafe {
+            __android_log_write(4, b"AdolunaRust\0".as_ptr() as *const _, t.as_ptr());
+        }
+    }
+}
+
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod clipboard_file;
 

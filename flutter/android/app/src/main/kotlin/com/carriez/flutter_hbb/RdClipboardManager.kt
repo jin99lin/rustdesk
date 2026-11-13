@@ -7,6 +7,8 @@ import java.util.TimerTask
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.annotation.Keep
 
@@ -217,12 +219,22 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
         val clipData = ClipData(clipDescription, item)
         lastUpdatedClipData = clipData
         lastRemoteText = text
-        // b98: never let an exception escape into the Rust/JNI caller.
-        try {
-            clipboardManager.setPrimaryClip(clipData)
-            Log.i(logTag, "remote clipboard applied, len=${text.length}")
-        } catch (t: Throwable) {
-            Log.e(logTag, "setPrimaryClip failed: ${t.javaClass.simpleName}")
+        Log.i(logTag, "remote clipboard received, formats=${mimeTypes.size} len=${text.length}")
+        // b99: write on the main thread (some ROMs drop/throw for binder writes from the Rust thread),
+        // then read back to prove the system clipboard really holds it. Never logs the content.
+        val len = text.length
+        val apply = Runnable {
+            try {
+                clipboardManager.setPrimaryClip(clipData)
+                val back = try { clipboardManager.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.length } catch (t: Throwable) { null }
+                Log.i(logTag, "remote clipboard applied, len=$len readBack=${back ?: "n/a"}")
+            } catch (t: Throwable) {
+                Log.e(logTag, "setPrimaryClip failed: ${t.javaClass.simpleName}: ${t.message?.take(120)}")
+            }
         }
+        if (Looper.myLooper() == Looper.getMainLooper()) apply.run()
+        else if (!mainHandler.post(apply)) apply.run()
     }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
 }

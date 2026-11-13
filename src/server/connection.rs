@@ -668,6 +668,24 @@ impl Connection {
         }
         #[cfg(target_os = "android")]
         start_channel(rx_to_cm, tx_from_cm);
+        // b99 (Adoluna): mobile Flutter writes enable-keyboard=N at every UI start and only flips it
+        // back when the accessibility state *changes* while the UI is running, so on unattended /
+        // boot-started devices the option stays N although InputService is running. The peer then
+        // believes keyboard is off and (by design) never sends its clipboard -> remote paste broken.
+        // Trust the real InputService state.
+        #[cfg(target_os = "android")]
+        {
+            let input_open = scrap::android::call_main_service_get_by_name("adoluna_input_open")
+                .map(|s| s == "true")
+                .unwrap_or(false);
+            if !conn.keyboard && input_open {
+                conn.keyboard = true;
+            }
+            crate::adoluna_alog(&format!(
+                "adoluna perm: keyboard={} (input_open={}) clipboard={}",
+                conn.keyboard, input_open, conn.clipboard
+            ));
+        }
         #[cfg(target_os = "android")]
         conn.send_permission(Permission::Keyboard, conn.keyboard)
             .await;
@@ -3392,14 +3410,14 @@ impl Connection {
                 }
                 Some(message::Union::Clipboard(cb)) => {
                     #[cfg(target_os = "android")]
-                    log::info!(
+                    crate::adoluna_alog(&format!(
                         "adoluna clipboard: recv single format={} handle={} enabled={} (perm={} disabled_by_peer={})",
                         cb.format.value(),
                         self.should_handle_text_clipboard_message(),
                         self.clipboard_enabled(),
                         self.clipboard,
                         self.disable_clipboard
-                    );
+                    ));
                     if self.should_handle_text_clipboard_message() && self.clipboard_enabled() {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
                         update_clipboard(vec![cb], ClipboardSide::Host);
@@ -3429,7 +3447,7 @@ impl Connection {
                 }
                 Some(message::Union::MultiClipboards(_mcb)) => {
                     #[cfg(target_os = "android")]
-                    log::info!(
+                    crate::adoluna_alog(&format!(
                         "adoluna clipboard: recv multi n={} formats={:?} handle={} enabled={} (perm={} disabled_by_peer={})",
                         _mcb.clipboards.len(),
                         _mcb.clipboards.iter().map(|c| c.format.value()).collect::<Vec<_>>(),
@@ -3437,7 +3455,7 @@ impl Connection {
                         self.clipboard_enabled(),
                         self.clipboard,
                         self.disable_clipboard
-                    );
+                    ));
                     if self.should_handle_text_clipboard_message() && self.clipboard_enabled() {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
                         update_clipboard(_mcb.clipboards, ClipboardSide::Host);
