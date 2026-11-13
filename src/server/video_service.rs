@@ -1194,7 +1194,10 @@ fn check_change_scale(hardware: bool) -> ResultType<()> {
         }
     }
     let screen_size = scrap::screen_size();
-    let scale_soft = hbb_common::config::option2bool(SCALE_SOFT, &Config::get_option(SCALE_SOFT));
+    // Adoluna b99: upstream halves any >1200px screen when software-encoding ("enable-" option =>
+    // on unless "N"). Our build has no mediacodec, so every session was 960x540 upscaled = blurry,
+    // whatever quality the controller picked. Full resolution unless explicitly set to "Y".
+    let scale_soft = Config::get_option(SCALE_SOFT) == "Y";
     let half_scale = !hardware && scale_soft;
     log::info!("hardware: {hardware}, scale_soft: {scale_soft}, screen_size: {screen_size:?}",);
     scrap::android::call_main_service_set_by_name(

@@ -70,7 +70,7 @@ mod adoluna_cmd;
 /// (logcat only) never saw Rust lines. Short diagnostics that must be visible go through this.
 #[cfg(target_os = "android")]
 pub fn adoluna_alog(msg: &str) {
-    log::info!("{}", msg);
+    hbb_common::log::info!("{}", msg);
     extern "C" {
         fn __android_log_write(
             prio: std::os::raw::c_int,
