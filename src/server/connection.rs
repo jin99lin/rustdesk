@@ -3302,6 +3302,17 @@ impl Connection {
                         }
                     }
 
+                    // Adoluna b99: legacy mode (what a desktop controller uses for Android peers) carries
+                    // Ctrl/Cmd/Shift/Alt only in `modifiers`; `pressed_modifiers` is tracked only for
+                    // map/translate, so overwriting dropped them and Cmd+V reached Android as a plain "v".
+                    if me.mode.enum_value() == Ok(KeyboardMode::Legacy) {
+                        for m in me.modifiers.iter() {
+                            if !modifiers.contains(m) {
+                                modifiers.push(*m);
+                            }
+                        }
+                    }
+
                     me.modifiers = modifiers;
 
                     let encode_result = me.write_to_bytes();
@@ -3380,6 +3391,15 @@ impl Connection {
                     self.update_auto_disconnect_timer();
                 }
                 Some(message::Union::Clipboard(cb)) => {
+                    #[cfg(target_os = "android")]
+                    log::info!(
+                        "adoluna clipboard: recv single format={} handle={} enabled={} (perm={} disabled_by_peer={})",
+                        cb.format.value(),
+                        self.should_handle_text_clipboard_message(),
+                        self.clipboard_enabled(),
+                        self.clipboard,
+                        self.disable_clipboard
+                    );
                     if self.should_handle_text_clipboard_message() && self.clipboard_enabled() {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
                         update_clipboard(vec![cb], ClipboardSide::Host);
@@ -3408,6 +3428,16 @@ impl Connection {
                     }
                 }
                 Some(message::Union::MultiClipboards(_mcb)) => {
+                    #[cfg(target_os = "android")]
+                    log::info!(
+                        "adoluna clipboard: recv multi n={} formats={:?} handle={} enabled={} (perm={} disabled_by_peer={})",
+                        _mcb.clipboards.len(),
+                        _mcb.clipboards.iter().map(|c| c.format.value()).collect::<Vec<_>>(),
+                        self.should_handle_text_clipboard_message(),
+                        self.clipboard_enabled(),
+                        self.clipboard,
+                        self.disable_clipboard
+                    );
                     if self.should_handle_text_clipboard_message() && self.clipboard_enabled() {
                         #[cfg(not(any(target_os = "android", target_os = "ios")))]
                         update_clipboard(_mcb.clipboards, ClipboardSide::Host);

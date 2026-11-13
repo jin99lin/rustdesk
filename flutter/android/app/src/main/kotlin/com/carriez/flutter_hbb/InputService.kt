@@ -429,7 +429,7 @@ class InputService : AccessibilityService() {
                 if (!(keyEvent.getDown() || keyEvent.getPress())) return
                 if (sc == 'v') {
                     val clip = MainActivity.rdClipboardManager?.textForPaste()
-                    Log.d(logTag, "remote paste, hasText:${!clip.isNullOrEmpty()}")
+                    Log.i(logTag, "remote paste, hasText:${!clip.isNullOrEmpty()}")
                     if (clip.isNullOrEmpty()) {
                         Handler(Looper.getMainLooper()).post { performOnFocusedEditable('v') }
                         return
@@ -538,7 +538,9 @@ class InputService : AccessibilityService() {
         val modInList = k.getModifiersList().any {
             it == ControlKey.Control || it == ControlKey.RControl || it == ControlKey.Meta || it == ControlKey.RWin
         }
-        val modTracked = k.getMode() != KeyboardMode.Legacy && remoteModDownAt != 0L && System.currentTimeMillis() - remoteModDownAt < 30_000
+        // b99: legacy too (b98 relied on `modifiers` alone, which the Rust side used to wipe), shorter window there
+        val modWindow = if (k.getMode() == KeyboardMode.Legacy) 10_000 else 30_000
+        val modTracked = remoteModDownAt != 0L && System.currentTimeMillis() - remoteModDownAt < modWindow
         if (!modInList && !modTracked) return null
         val letter: Char? = when {
             text != null && text.length == 1 -> text[0].lowercaseChar()
@@ -550,7 +552,9 @@ class InputService : AccessibilityService() {
             }
             else -> null
         }
-        return if (letter == 'v' || letter == 'a' || letter == 'c' || letter == 'x') letter else null
+        val sc = if (letter == 'v' || letter == 'a' || letter == 'c' || letter == 'x') letter else null
+        Log.i(logTag, "shortcut check mode:${k.getMode()} modInList:$modInList modTracked:$modTracked hit:$sc")
+        return sc
     }
 
     private fun performOnFocusedEditable(sc: Char) {
@@ -572,7 +576,7 @@ class InputService : AccessibilityService() {
                 'v' -> node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
                 else -> false
             }
-            Log.d(logTag, "shortcut $sc ok=$ok")
+            Log.i(logTag, "shortcut $sc ok=$ok")
         } catch (t: Throwable) {
             Log.e(logTag, "shortcut $sc failed: ${t.javaClass.simpleName}")
         }

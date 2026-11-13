@@ -852,7 +852,8 @@ pub fn handle_msg_clipboard(mut cb: Clipboard) {
         ..Default::default()
     };
     if let Ok(bytes) = multi_clips.write_to_bytes() {
-        let _ = scrap::android::ffi::call_clipboard_manager_update_clipboard(&bytes);
+        let r = scrap::android::ffi::call_clipboard_manager_update_clipboard(&bytes);
+        log::info!("adoluna clipboard: to java (single) ok={}", r.is_ok());
     }
 }
 
@@ -866,7 +867,8 @@ pub fn handle_msg_multi_clipboards(mut mcb: MultiClipboards) {
         }
     }
     if let Ok(bytes) = mcb.write_to_bytes() {
-        let _ = scrap::android::ffi::call_clipboard_manager_update_clipboard(&bytes);
+        let r = scrap::android::ffi::call_clipboard_manager_update_clipboard(&bytes);
+        log::info!("adoluna clipboard: to java (multi) ok={}", r.is_ok());
     }
 }
 

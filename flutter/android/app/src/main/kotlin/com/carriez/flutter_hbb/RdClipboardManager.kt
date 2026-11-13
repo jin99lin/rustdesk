@@ -220,7 +220,7 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
         // b98: never let an exception escape into the Rust/JNI caller.
         try {
             clipboardManager.setPrimaryClip(clipData)
-            Log.d(logTag, "remote clipboard applied, len=${text.length}")
+            Log.i(logTag, "remote clipboard applied, len=${text.length}")
         } catch (t: Throwable) {
             Log.e(logTag, "setPrimaryClip failed: ${t.javaClass.simpleName}")
         }
