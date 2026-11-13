@@ -50,6 +50,22 @@ class MainActivity : FlutterActivity() {
         private var _rdClipboardManager: RdClipboardManager? = null
         val rdClipboardManager: RdClipboardManager?
             get() = _rdClipboardManager;
+
+        // b98: the clipboard bridge used to be created only in MainActivity.onCreate. On unattended
+        // devices (boot / watchdog / DO kiosk) the UI never opens, so Rust had no ClipboardManager and
+        // text copied on the controller was silently dropped. MainService now calls this too.
+        @Synchronized
+        fun ensureRdClipboardManager(c: Context) {
+            if (_rdClipboardManager != null) return
+            try {
+                val cm = c.applicationContext.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                _rdClipboardManager = RdClipboardManager(cm)
+                FFI.setClipboardManager(_rdClipboardManager!!)
+                Log.i("RdClipboardManager", "clipboard bridge ready")
+            } catch (t: Throwable) {
+                Log.e("RdClipboardManager", "clipboard bridge init failed: ${t.javaClass.simpleName}")
+            }
+        }
     }
 
     private val channelTag = "mChannel"
@@ -243,10 +259,7 @@ class MainActivity : FlutterActivity() {
                 .putBoolean("KEY_START_ON_BOOT_OPT_SEEDED", true)
                 .apply()
         }
-        if (_rdClipboardManager == null) {
-            _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-            FFI.setClipboardManager(_rdClipboardManager!!)
-        }
+        ensureRdClipboardManager(this)
     }
 
     override fun onDestroy() {

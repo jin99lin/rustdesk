@@ -1179,7 +1179,9 @@ fn check_change_scale(hardware: bool) -> ResultType<()> {
     use base::config::keys::OPTION_ENABLE_ANDROID_SOFTWARE_ENCODING_HALF_SCALE as SCALE_SOFT;
 
     // isStart flag is set at the end of startCapture() in Android, wait it to be set.
-    let n = 60; // 3s
+    // Adoluna b98: an idle device may have released MediaProjection (no cast icon) and re-acquires it
+    // when the session starts (transparent activity + auto-approved consent), so allow up to 10s.
+    let n = 200; // 10s
     for i in 0..n {
         if scrap::is_start() == Some(true) {
             log::info!("start flag is set");

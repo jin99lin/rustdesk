@@ -16,6 +16,11 @@ class PermissionRequestTransparentActivity: Activity() {
         super.onCreate(savedInstanceState)
         Log.d(logTag, "onCreate PermissionRequestTransparentActivity: intent.action: ${intent.action}")
         AdolunaKioskActivity.permissionInFlight = true
+        if (intent.getBooleanExtra(EXT_ADOLUNA_SILENT_REACQUIRE, false) && Build.VERSION.SDK_INT >= 27) {
+            // b98: idle-park re-acquire (PROJECT_MEDIA appop = allow, no dialog is shown). We must
+            // reach onResume to get the auto-approved result even if the device is asleep / locked.
+            try { setShowWhenLocked(true); setTurnScreenOn(true) } catch (_: Throwable) {}
+        }
         Log.i("AdolunaDO", "permission activity onCreate task=$taskId")
 
         when (intent.action) {

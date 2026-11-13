@@ -199,6 +199,10 @@ class MainService : Service() {
         private var _isReady = false // media permission ready status
         private var _isStart = false // screen capture start status
         private var _isAudioStart = false // audio capture start status
+        // b98: projection released while idle (no cast icon); re-acquired without consent on connect
+        @Volatile private var _isParked = false
+        val isParked: Boolean
+            get() = _isParked
         val isReady: Boolean
             get() = _isReady
         val isStart: Boolean
@@ -223,11 +227,22 @@ class MainService : Service() {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 if (resultCode == RES_FAILED) {
                     cancelMediaProjectionRecovery()
+                    if (reacquireInFlight) onReacquireFailed("denied")
                 }
             }
         }
     private var mediaProjectionForegroundService = false
     private var microphoneForegroundService = false
+
+    // b98: idle "park" of MediaProjection. Only when `adb shell appops set com.adoluna.support
+    // PROJECT_MEDIA allow` was done (createScreenCaptureIntent then auto-approves with no dialog) and
+    // we can start the (transparent) request activity from the background. Otherwise we keep holding
+    // the projection forever exactly as before, so unattended access never depends on a human.
+    private val parkHandler = Handler(Looper.getMainLooper())
+    private val parkRunnable = Runnable { maybeParkProjection() }
+    private val reacquireTimeoutRunnable = Runnable { onReacquireFailed("timeout") }
+    private var reacquireInFlight = false
+    private var parkDisabledThisProcess = false
     private var surface: Surface? = null
     private val sendVP9Thread = Executors.newSingleThreadExecutor()
     private var videoEncoder: MediaCodec? = null
@@ -247,6 +262,8 @@ class MainService : Service() {
         AdolunaDevice.scheduleWatchdog(this)
         Log.d(logTag,"MainService onCreate, sdk int:${Build.VERSION.SDK_INT} reuseVirtualDisplay:$reuseVirtualDisplay")
         FFI.init(this)
+        // b98: clipboard bridge must exist even when the UI (MainActivity) is never opened
+        MainActivity.ensureRdClipboardManager(this)
         HandlerThread("Service", Process.THREAD_PRIORITY_BACKGROUND).apply {
             start()
             serviceLooper = looper
@@ -383,10 +400,13 @@ class MainService : Service() {
         updateScreenInfo(newConfig.orientation)
     }
 
-    private fun requestMediaProjection(recovery: Boolean = false) {
+    private fun requestMediaProjection(recovery: Boolean = false, silent: Boolean = false) {
         val intent = Intent(this, PermissionRequestTransparentActivity::class.java).apply {
             action = ACT_REQUEST_MEDIA_PROJECTION
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            // b98: auto-approved re-acquire after an idle park; the activity must resume (also over
+            // the keyguard / with the screen off) to receive the result.
+            if (silent) putExtra(EXT_ADOLUNA_SILENT_REACQUIRE, true)
             if (recovery) {
                 putExtra(EXT_MEDIA_PROJECTION_RESULT_RECEIVER, mediaProjectionResultReceiver)
             }
@@ -521,11 +541,19 @@ class MainService : Service() {
         mediaProjection = projection
         mediaProjectionCallback = callback
         _isReady = true
+        val wasParked = _isParked
+        _isParked = false
+        if (reacquireInFlight) {
+            reacquireInFlight = false
+            parkHandler.removeCallbacks(reacquireTimeoutRunnable)
+            Log.i("AdolunaDO", "park: projection re-acquired (wasParked=$wasParked restart=$restartCapture)")
+        }
         checkMediaPermission()
         if (restartCapture) {
             captureRestartPending = false
             startCapture(restartInVoiceCall)
         }
+        if (!isStart) schedulePark()
     }
 
     private fun showVoiceCallError(message: String) {
@@ -593,7 +621,104 @@ class MainService : Service() {
     }
 
     fun startCapture(): Boolean {
-        return startCapture(false)
+        val ok = startCapture(false)
+        if (!ok) reacquireIfParked("startCapture")
+        return ok
+    }
+
+    private fun projectMediaAppOpAllowed(): Boolean {
+        return try {
+            val aom = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            val op = "android:project_media"
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                aom.unsafeCheckOpNoThrow(op, Process.myUid(), packageName)
+            } else {
+                @Suppress("DEPRECATION")
+                aom.checkOpNoThrow(op, Process.myUid(), packageName)
+            }
+            mode == AppOpsManager.MODE_ALLOWED
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    private fun parkDisabledPref(): Boolean {
+        return try {
+            val vc = AdolunaDevice.ownBuild(this)
+            getSharedPreferences(KEY_SHARED_PREFERENCES, MODE_PRIVATE).getLong("adoluna_park_disabled_vc", -1L) == vc
+        } catch (t: Throwable) { false }
+    }
+
+    private fun canPark(): Boolean {
+        if (parkDisabledThisProcess || parkDisabledPref()) return false
+        if (!projectMediaAppOpAllowed()) return false
+        // Android 10+: the request activity is started from the background; needs overlay or DO.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !AdolunaDO.isOwner(this) &&
+            !android.provider.Settings.canDrawOverlays(this)) return false
+        return true
+    }
+
+    private fun schedulePark(delayMs: Long = 10_000) {
+        parkHandler.removeCallbacks(parkRunnable)
+        parkHandler.postDelayed(parkRunnable, delayMs)
+    }
+
+    @Synchronized
+    private fun maybeParkProjection() {
+        if (isStart || captureRestartPending || reacquireInFlight || mediaProjection == null) return
+        if (audioRecordHandle.isVoiceCallActive()) return
+        if (!canPark()) {
+            Log.i("AdolunaDO", "park: not parking (appop=${projectMediaAppOpAllowed()} disabled=${parkDisabledThisProcess || parkDisabledPref()})")
+            return
+        }
+        Log.i("AdolunaDO", "park: idle, releasing projection (PROJECT_MEDIA allowed)")
+        virtualDisplay?.release()
+        virtualDisplay = null
+        releaseMediaProjection()
+        setMediaProjectionForegroundService(false)
+        // _isReady stays true: the next connection re-acquires the projection with no consent dialog.
+        _isParked = true
+        checkMediaPermission()
+    }
+
+    @Synchronized
+    private fun reacquireIfParked(why: String) {
+        if (mediaProjection != null || !_isParked) return
+        captureRestartPending = true
+        if (reacquireInFlight) return
+        reacquireInFlight = true
+        Log.i("AdolunaDO", "park: re-acquiring projection ($why)")
+        parkHandler.removeCallbacks(parkRunnable)
+        parkHandler.removeCallbacks(reacquireTimeoutRunnable)
+        parkHandler.postDelayed(reacquireTimeoutRunnable, 12_000)
+        try {
+            if (!powerManager.isInteractive && !wakeLock.isHeld) wakeLock.acquire(5000)
+        } catch (_: Throwable) {}
+        try {
+            requestMediaProjection(true, silent = true)
+        } catch (t: Throwable) {
+            Log.e("AdolunaDO", "park: request failed: ${t.javaClass.simpleName}")
+            onReacquireFailed("exception")
+        }
+    }
+
+    // Re-acquire did not complete: never park again on this build (keep the projection held as
+    // before), and fall back to the normal not-ready recovery (watchdog / start-on-boot re-init).
+    @Synchronized
+    private fun onReacquireFailed(why: String) {
+        parkHandler.removeCallbacks(reacquireTimeoutRunnable)
+        if (!reacquireInFlight) return
+        reacquireInFlight = false
+        if (mediaProjection != null) return
+        Log.w("AdolunaDO", "park: re-acquire failed ($why); parking disabled for this build")
+        parkDisabledThisProcess = true
+        try {
+            getSharedPreferences(KEY_SHARED_PREFERENCES, MODE_PRIVATE).edit()
+                .putLong("adoluna_park_disabled_vc", AdolunaDevice.ownBuild(this)).apply()
+        } catch (_: Throwable) {}
+        _isParked = false
+        _isReady = false
+        checkMediaPermission()
     }
 
     @Synchronized
@@ -694,10 +819,15 @@ class MainService : Service() {
             audioRecordHandle.tryReleaseAudio()
             true
         }
+        schedulePark()
     }
 
     fun destroy() {
         Log.d(logTag, "destroy service")
+        parkHandler.removeCallbacks(parkRunnable)
+        parkHandler.removeCallbacks(reacquireTimeoutRunnable)
+        reacquireInFlight = false
+        _isParked = false
         _isReady = false
         _isAudioStart = false
 

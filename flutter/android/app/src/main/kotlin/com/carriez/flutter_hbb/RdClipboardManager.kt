@@ -41,6 +41,22 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
     val isCaptureStarted: Boolean
         get() = _isCaptureStarted
 
+    // b98: last text received from the controller. Android 10+ does not let a background app /
+    // accessibility service read the system clipboard, so the remote Ctrl/Cmd+V handler pastes this.
+    // Never logged (may contain passwords).
+    @Volatile
+    var lastRemoteText: String? = null
+        private set
+
+    fun textForPaste(): String? {
+        lastRemoteText?.let { return it }
+        return try {
+            clipboardManager.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text?.toString()
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     fun checkPrimaryClip(isClient: Boolean) {
         val clipData = clipboardManager.primaryClip
         if (clipData != null && clipData.itemCount > 0) {
@@ -150,7 +166,15 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
 
     @Keep
     fun rustUpdateClipboard(clips: ByteArray) {
-        val clips = MultiClipboards.parseFrom(clips)
+        try {
+            applyRemoteClipboard(clips)
+        } catch (t: Throwable) {
+            Log.e(logTag, "rustUpdateClipboard failed: ${t.javaClass.simpleName}")
+        }
+    }
+
+    private fun applyRemoteClipboard(data: ByteArray) {
+        val clips = MultiClipboards.parseFrom(data)
         var mimeTypes = mutableListOf<String>()
         var text: String? = null
         var html: String? = null
@@ -192,6 +216,13 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
         }
         val clipData = ClipData(clipDescription, item)
         lastUpdatedClipData = clipData
-        clipboardManager.setPrimaryClip(clipData)
+        lastRemoteText = text
+        // b98: never let an exception escape into the Rust/JNI caller.
+        try {
+            clipboardManager.setPrimaryClip(clipData)
+            Log.d(logTag, "remote clipboard applied, len=${text.length}")
+        } catch (t: Throwable) {
+            Log.e(logTag, "setPrimaryClip failed: ${t.javaClass.simpleName}")
+        }
     }
 }

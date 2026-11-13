@@ -35,6 +35,7 @@ import kotlin.math.max
 import hbb.MessageOuterClass.KeyEvent
 import hbb.MessageOuterClass.KeyboardMode
 import hbb.KeyEventConverter
+import hbb.MessageOuterClass.ControlKey
 
 // const val BUTTON_UP = 2
 // const val BUTTON_BACK = 0x08
@@ -418,8 +419,34 @@ class InputService : AccessibilityService() {
 
         Log.d(logTag, "onKeyEvent mode:$keyboardMode down:${keyEvent.getDown()} press:${keyEvent.getPress()} hasText:${textToCommit != null}")
 
+        // b98: controller Ctrl/Cmd shortcuts. Before, Cmd+V / Ctrl+V just typed "v". Now V pastes the
+        // text the controller synced to our clipboard (same insert path as typing, works in password
+        // fields), A selects all, C/X copy/cut inside the focused field.
+        var isPaste = false
+        try {
+            val sc = remoteShortcut(keyEvent, textToCommit)
+            if (sc != null) {
+                if (!(keyEvent.getDown() || keyEvent.getPress())) return
+                if (sc == 'v') {
+                    val clip = MainActivity.rdClipboardManager?.textForPaste()
+                    Log.d(logTag, "remote paste, hasText:${!clip.isNullOrEmpty()}")
+                    if (clip.isNullOrEmpty()) {
+                        Handler(Looper.getMainLooper()).post { performOnFocusedEditable('v') }
+                        return
+                    }
+                    textToCommit = clip
+                    isPaste = true
+                } else {
+                    Handler(Looper.getMainLooper()).post { performOnFocusedEditable(sc) }
+                    return
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e(logTag, "shortcut failed: ${t.javaClass.simpleName}")
+        }
+
         var ke: KeyEventAndroid? = null
-        if (Build.VERSION.SDK_INT < 33 || textToCommit == null) {
+        if (!isPaste && (Build.VERSION.SDK_INT < 33 || textToCommit == null)) {
             ke = KeyEventConverter.toAndroidKeyEvent(keyEvent)
         }
         ke?.let { event ->
@@ -457,7 +484,7 @@ class InputService : AccessibilityService() {
         }
         if (!handled) {
             val ev = ke ?: KeyEventAndroid(KeyEventAndroid.ACTION_DOWN, KeyEventAndroid.KEYCODE_UNKNOWN)
-            val press = keyEvent.getPress()
+            val press = keyEvent.getPress() && !isPaste
             Handler(Looper.getMainLooper()).post {
                 try {
                     val possibleNodes = possibleAccessibiltyNodes()
@@ -475,6 +502,79 @@ class InputService : AccessibilityService() {
                     Log.e(logTag, "a11y key failed: ${t.javaClass.simpleName}")
                 }
             }
+        }
+    }
+
+    // b98: Ctrl / Cmd held on the controller. Legacy mode sends it in `modifiers`; translate mode
+    // may only send the modifier key's own down/up, so track that too (expires so a lost key-up
+    // cannot turn later typing into shortcuts).
+    private var remoteModDownAt = 0L
+
+    private fun remoteShortcut(k: KeyEvent, text: String?): Char? {
+        val down = k.getDown() || k.getPress()
+        if (k.hasControlKey()) {
+            when (k.getControlKey()) {
+                ControlKey.Control, ControlKey.RControl, ControlKey.Meta, ControlKey.RWin -> {
+                    if (!k.getPress()) remoteModDownAt = if (k.getDown()) System.currentTimeMillis() else 0L
+                    return null
+                }
+                ControlKey.Insert -> {
+                    // Shift+Insert = paste
+                    return if (k.getModifiersList().any { it == ControlKey.Shift || it == ControlKey.RShift }) 'v' else null
+                }
+                else -> return null
+            }
+        }
+        if (k.hasChr() && (k.getMode() == KeyboardMode.Map || k.getMode() == KeyboardMode.Translate)) {
+            // chr is an Android keycode here
+            when (k.getChr()) {
+                KeyEventAndroid.KEYCODE_CTRL_LEFT, KeyEventAndroid.KEYCODE_CTRL_RIGHT,
+                KeyEventAndroid.KEYCODE_META_LEFT, KeyEventAndroid.KEYCODE_META_RIGHT -> {
+                    if (!k.getPress()) remoteModDownAt = if (k.getDown()) System.currentTimeMillis() else 0L
+                    return null
+                }
+            }
+        }
+        val modInList = k.getModifiersList().any {
+            it == ControlKey.Control || it == ControlKey.RControl || it == ControlKey.Meta || it == ControlKey.RWin
+        }
+        val modTracked = k.getMode() != KeyboardMode.Legacy && remoteModDownAt != 0L && System.currentTimeMillis() - remoteModDownAt < 30_000
+        if (!modInList && !modTracked) return null
+        val letter: Char? = when {
+            text != null && text.length == 1 -> text[0].lowercaseChar()
+            k.hasChr() && k.getMode() == KeyboardMode.Legacy -> k.getChr().toChar().lowercaseChar()
+            k.hasChr() -> when (k.getChr()) {
+                KeyEventAndroid.KEYCODE_V -> 'v'; KeyEventAndroid.KEYCODE_A -> 'a'
+                KeyEventAndroid.KEYCODE_C -> 'c'; KeyEventAndroid.KEYCODE_X -> 'x'
+                else -> null
+            }
+            else -> null
+        }
+        return if (letter == 'v' || letter == 'a' || letter == 'c' || letter == 'x') letter else null
+    }
+
+    private fun performOnFocusedEditable(sc: Char) {
+        try {
+            val f = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            val node = f?.let { if (it.isEditable) it else findFocusedEditable(it) }
+                ?: getRootInActiveWindow()?.let { findFocusedEditable(it) }
+                ?: return
+            val ok = when (sc) {
+                'a' -> {
+                    val len = node.text?.length ?: 0
+                    val b = Bundle()
+                    b.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                    b.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, b)
+                }
+                'c' -> node.performAction(AccessibilityNodeInfo.ACTION_COPY)
+                'x' -> node.performAction(AccessibilityNodeInfo.ACTION_CUT)
+                'v' -> node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                else -> false
+            }
+            Log.d(logTag, "shortcut $sc ok=$ok")
+        } catch (t: Throwable) {
+            Log.e(logTag, "shortcut $sc failed: ${t.javaClass.simpleName}")
         }
     }
 
