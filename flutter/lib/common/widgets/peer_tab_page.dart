@@ -384,7 +384,9 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   Widget deleteSelection() {
     final model = Provider.of<PeerTabModel>(context);
-    if (model.currentTab == PeerTabIndex.group.index) {
+    // Adoluna b105: also hide multi-select delete on the address-book tab.
+    if (model.currentTab == PeerTabIndex.group.index ||
+        model.currentTab == PeerTabIndex.ab.index) {
       return Offstage();
     }
     return _hoverAction(
@@ -477,10 +479,9 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   Widget editSelectionTags() {
     final model = Provider.of<PeerTabModel>(context);
+    // Adoluna b105: do not offer batch Edit Tag on the address-book tab.
     return Offstage(
-      offstage: !gFFI.userModel.isLogin ||
-          model.currentTab != PeerTabIndex.ab.index ||
-          gFFI.abModel.currentAbTags.isEmpty,
+      offstage: true,
       child: _hoverAction(
               context: context,
               toolTip: translate('Edit Tag'),

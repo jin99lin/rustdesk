@@ -1231,22 +1231,9 @@ class AddressBookPeerCard extends BasePeerCard {
     if (isWindows) {
       menuItems.add(_createShortCutAction(peer.id));
     }
-    if (gFFI.abModel.current.canWrite()) {
-      menuItems.add(MenuEntryDivider());
-      if (isMobile || isDesktop || isWebDesktop) {
-        menuItems.add(_renameAction(peer.id));
-      }
-      if (gFFI.abModel.current.isPersonal() && peer.hash.isNotEmpty) {
-        menuItems.add(_unrememberPasswordAction(peer.id));
-      }
-      if (!gFFI.abModel.current.isPersonal()) {
-        menuItems.add(_changeSharedAbPassword());
-      }
-      if (gFFI.abModel.currentAbTags.isNotEmpty) {
-        menuItems.add(_editTagAction(peer.id));
-      }
-      menuItems.add(_editNoteAction(peer.id));
-    }
+    // Adoluna b105: hide Rename / Delete / Edit tag / Edit note / Set shared
+    // password on address-book cards for all users. Those edits fight the
+    // merchant reconcile and are not the official device name / store / notes.
     final addressbooks = gFFI.abModel.addressBooksCanWrite();
     if (gFFI.peerTabModel.currentTab == PeerTabIndex.ab.index) {
       addressbooks.remove(gFFI.abModel.currentName.value);
@@ -1255,10 +1242,6 @@ class AddressBookPeerCard extends BasePeerCard {
       menuItems.add(_addToAb(peer));
     }
     menuItems.add(_existIn());
-    if (gFFI.abModel.current.canWrite()) {
-      menuItems.add(MenuEntryDivider());
-      menuItems.add(_removeAction(peer.id));
-    }
     return menuItems;
   }
 
@@ -1267,58 +1250,6 @@ class AddressBookPeerCard extends BasePeerCard {
   @override
   void _update() =>
       {}; //gFFI.abModel.pullAb(force: ForcePullAb.current, quiet: true);
-
-  @protected
-  MenuEntryBase<String> _editTagAction(String id) {
-    return MenuEntryButton<String>(
-      childBuilder: (TextStyle? style) => Text(
-        translate('Edit Tag'),
-        style: style,
-      ),
-      proc: () {
-        editAbTagDialog(gFFI.abModel.getPeerTags(id), (selectedTag) async {
-          await gFFI.abModel.changeTagForPeers([id], selectedTag);
-        });
-      },
-      padding: super.menuPadding,
-      dismissOnClicked: true,
-    );
-  }
-
-  @protected
-  MenuEntryBase<String> _editNoteAction(String id) {
-    return MenuEntryButton<String>(
-      childBuilder: (TextStyle? style) => Text(
-        translate('Edit note'),
-        style: style,
-      ),
-      proc: () {
-        editAbPeerNoteDialog(id);
-      },
-      padding: super.menuPadding,
-      dismissOnClicked: true,
-    );
-  }
-
-  @protected
-  @override
-  Future<String> _getAlias(String id) async =>
-      gFFI.abModel.find(id)?.alias ?? '';
-
-  MenuEntryBase<String> _changeSharedAbPassword() {
-    return MenuEntryButton<String>(
-      childBuilder: (TextStyle? style) => Text(
-        translate(
-            peer.password.isEmpty ? 'Set shared password' : 'Change Password'),
-        style: style,
-      ),
-      proc: () {
-        setSharedAbPasswordDialog(gFFI.abModel.currentName.value, peer);
-      },
-      padding: super.menuPadding,
-      dismissOnClicked: true,
-    );
-  }
 
   MenuEntryBase<String> _existIn() {
     final names = gFFI.abModel.idExistIn(peer.id);
