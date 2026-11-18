@@ -1234,13 +1234,7 @@ class AddressBookPeerCard extends BasePeerCard {
     // Adoluna b105: hide Rename / Delete / Edit tag / Edit note / Set shared
     // password on address-book cards for all users. Those edits fight the
     // merchant reconcile and are not the official device name / store / notes.
-    final addressbooks = gFFI.abModel.addressBooksCanWrite();
-    if (gFFI.peerTabModel.currentTab == PeerTabIndex.ab.index) {
-      addressbooks.remove(gFFI.abModel.currentName.value);
-    }
-    if (addressbooks.isNotEmpty) {
-      menuItems.add(_addToAb(peer));
-    }
+    // b106: also hide "Add to address book" on address-book cards.
     menuItems.add(_existIn());
     return menuItems;
   }

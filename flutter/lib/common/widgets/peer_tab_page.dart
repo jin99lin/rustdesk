@@ -462,8 +462,11 @@ class _PeerTabPageState extends State<PeerTabPage>
     if (model.currentTab == PeerTabIndex.ab.index) {
       addressbooks.remove(gFFI.abModel.currentName.value);
     }
+    // Adoluna b106: hide multi-select "Add to address book" on the AB tab.
     return Offstage(
-      offstage: !gFFI.userModel.isLogin || addressbooks.isEmpty,
+      offstage: model.currentTab == PeerTabIndex.ab.index ||
+          !gFFI.userModel.isLogin ||
+          addressbooks.isEmpty,
       child: _hoverAction(
         context: context,
         toolTip: translate('Add to address book'),
