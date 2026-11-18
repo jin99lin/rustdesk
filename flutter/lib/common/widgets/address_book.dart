@@ -126,19 +126,61 @@ class _AddressBookState extends State<AddressBook> {
   }
 
   // ---- Adoluna b80: technician store list ----
-  static const _kManagedAb = '商家 / Merchants';
+  // b103: prefer 全部商家, then 商家 / Merchants, then first non-empty shared book.
+  // Auto-pick only once so the restored address-book switcher stays usable.
+  static const _kPreferredAbs = ['全部商家 / All Merchants', '商家 / Merchants'];
+  bool _didAutoPickAb = false;
 
   void _adolunaPickManaged() {
     if (gFFI.abModel.legacyMode.value) return;
-    final names = gFFI.abModel.addressBookNames();
-    if (names.contains(_kManagedAb) &&
-        gFFI.abModel.currentName.value != _kManagedAb) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (gFFI.abModel.currentName.value != _kManagedAb) {
-          gFFI.abModel.setCurrentName(_kManagedAb);
+    if (_didAutoPickAb) return;
+    if (!gFFI.abModel.listInitialized) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (_didAutoPickAb || gFFI.abModel.legacyMode.value) return;
+      final names = gFFI.abModel.addressBookNames();
+      if (names.isEmpty) return;
+      final personal = gFFI.abModel.personalAddressBookName();
+      final current = gFFI.abModel.currentName.value;
+      // Keep a preferred book or any already-selected shared book (cache / user pick).
+      if (_kPreferredAbs.contains(current) ||
+          (current.isNotEmpty &&
+              current != personal &&
+              names.contains(current) &&
+              !(gFFI.abModel.addressbooks[current]?.isPersonal() ?? true))) {
+        _didAutoPickAb = true;
+        return;
+      }
+      String? pick;
+      for (final n in _kPreferredAbs) {
+        if (names.contains(n)) {
+          pick = n;
+          break;
         }
-      });
-    }
+      }
+      if (pick == null) {
+        for (final n in names) {
+          final ab = gFFI.abModel.addressbooks[n];
+          if (ab == null || ab.isPersonal()) continue;
+          if (!ab.initialized) {
+            await ab.pullAb(quiet: true);
+          }
+          if (ab.peers.isNotEmpty) {
+            pick = n;
+            break;
+          }
+        }
+      }
+      pick ??= names.cast<String?>().firstWhere(
+          (n) =>
+              n != personal &&
+              !(gFFI.abModel.addressbooks[n]?.isPersonal() ?? true),
+          orElse: () => null);
+      if (pick != null && pick.isNotEmpty && pick != current) {
+        await gFFI.abModel.setCurrentName(pick);
+        bind.setLocalFlutterOption(k: kOptionCurrentAbName, v: pick);
+      }
+      _didAutoPickAb = true;
+    });
   }
 
   Widget _adolunaStores(bool isPortrait) {
@@ -163,7 +205,8 @@ class _AddressBookState extends State<AddressBook> {
           !(cur.startsWith(kAdolunaMerchantSel) &&
               counts.keys.any((k) =>
                   k == cur.substring(kAdolunaMerchantSel.length) ||
-                  k.startsWith('${cur.substring(kAdolunaMerchantSel.length)} · ')))) {
+                  k.startsWith(
+                      '${cur.substring(kAdolunaMerchantSel.length)} · ')))) {
         WidgetsBinding.instance.addPostFrameCallback((_) => sel.clear());
       }
       void pick(String k) {
@@ -174,19 +217,27 @@ class _AddressBookState extends State<AddressBook> {
       final allLabel = translate('All devices');
       final items = <MapEntry<String, String>>[
         MapEntry('', '$allLabel (${peers.length})'),
-        ...stores.map((k) => MapEntry(k, '$k (${online[k] ?? 0}/${counts[k]})')),
+        ...stores
+            .map((k) => MapEntry(k, '$k (${online[k] ?? 0}/${counts[k]})')),
       ];
       if (isPortrait) {
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-              children: items
-                  .map((e) => ChoiceChip(
-                        label: Text(e.value, style: TextStyle(fontSize: 13)),
-                        selected: cur == e.key,
-                        onSelected: (_) => pick(e.key),
-                      ).marginOnly(right: 6, top: 6))
-                  .toList()),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildAbDropdown(),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                  children: items
+                      .map((e) => ChoiceChip(
+                            label:
+                                Text(e.value, style: TextStyle(fontSize: 13)),
+                            selected: cur == e.key,
+                            onSelected: (_) => pick(e.key),
+                          ).marginOnly(right: 6, top: 6))
+                      .toList()),
+            ),
+          ],
         );
       }
       // b82: group stores under merchant headings ("Merchant · Store"); rows show the store only.
@@ -207,9 +258,8 @@ class _AddressBookState extends State<AddressBook> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                           fontSize: 13,
-                          fontWeight: selected
-                              ? FontWeight.bold
-                              : FontWeight.normal))),
+                          fontWeight:
+                              selected ? FontWeight.bold : FontWeight.normal))),
               if (key.isNotEmpty)
                 Text('${online[key] ?? 0}/${counts[key]}',
                     style: TextStyle(fontSize: 12, color: Colors.grey)),
@@ -226,48 +276,58 @@ class _AddressBookState extends State<AddressBook> {
       }
       final ms = groups.keys.toList()
         ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-      return ListView(children: [
-        row('', '$allLabel (${peers.length})'),
-        for (final m in ms) ...[
-          // b84: tapping the merchant heading shows the devices of all its stores
-          Builder(builder: (_) {
-            final mk = '$kAdolunaMerchantSel$m';
-            final msel = cur == mk;
-            var mOn = 0, mAll = 0;
-            for (final p in peers) {
-              if (p.tags.any((t) => adolunaTagInMerchant(t.toString(), m))) {
-                mAll++;
-                if (p.online) mOn++;
-              }
-            }
-            // b87: heading looks clickable (dark bold, hover highlight, selected blue like store rows)
-            final primary = Theme.of(context).colorScheme.primary;
-            return InkWell(
-              onTap: () => pick(mk),
-              hoverColor: primary.withOpacity(0.08),
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
-                color: msel ? primary.withOpacity(0.15) : null,
-                child: Row(children: [
-                  Expanded(
-                      child: Text(m,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: 13,
-                              color: Theme.of(context).textTheme.bodyLarge?.color,
-                              fontWeight: FontWeight.w700))),
-                  Text('$mOn/$mAll',
-                      style: TextStyle(fontSize: 11, color: Colors.grey)),
-                ]),
-              ),
-            );
-          }),
-          for (final k in groups[m]!)
-            row(k, k.contains(' · ') ? k.substring(k.indexOf(' · ') + 3) : k,
-                indent: 22),
-        ],
-      ]      );
+      return Column(children: [
+        _buildAbDropdown(),
+        Expanded(
+          child: ListView(children: [
+            row('', '$allLabel (${peers.length})'),
+            for (final m in ms) ...[
+              // b84: tapping the merchant heading shows the devices of all its stores
+              Builder(builder: (_) {
+                final mk = '$kAdolunaMerchantSel$m';
+                final msel = cur == mk;
+                var mOn = 0, mAll = 0;
+                for (final p in peers) {
+                  if (p.tags
+                      .any((t) => adolunaTagInMerchant(t.toString(), m))) {
+                    mAll++;
+                    if (p.online) mOn++;
+                  }
+                }
+                // b87: heading looks clickable (dark bold, hover highlight, selected blue like store rows)
+                final primary = Theme.of(context).colorScheme.primary;
+                return InkWell(
+                  onTap: () => pick(mk),
+                  hoverColor: primary.withOpacity(0.08),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+                    color: msel ? primary.withOpacity(0.15) : null,
+                    child: Row(children: [
+                      Expanded(
+                          child: Text(m,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  color: Theme.of(context)
+                                      .textTheme
+                                      .bodyLarge
+                                      ?.color,
+                                  fontWeight: FontWeight.w700))),
+                      Text('$mOn/$mAll',
+                          style: TextStyle(fontSize: 11, color: Colors.grey)),
+                    ]),
+                  ),
+                );
+              }),
+              for (final k in groups[m]!)
+                row(k,
+                    k.contains(' · ') ? k.substring(k.indexOf(' · ') + 3) : k,
+                    indent: 22),
+            ],
+          ]),
+        ),
+      ]);
     });
   }
 
