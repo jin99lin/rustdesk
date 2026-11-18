@@ -5,6 +5,11 @@ name: adoluna-macos
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse_run_id:
+        description: "Reuse app-aarch64 and app-x86_64 artifacts from this Actions run id and skip arch builds"
+        required: false
+        type: string
 
 env:
   VERSION: "1.5.0"
@@ -27,9 +32,15 @@ jobs:
           AID: ${{ secrets.APPLE_ID }}
           APW: ${{ secrets.APPLE_APP_PASSWORD }}
           TID: ${{ secrets.APPLE_TEAM_ID }}
-        run: xcrun notarytool history --apple-id "$AID" --password "$APW" --team-id "$TID" | head -20
+        run: |
+          set -euo pipefail
+          # Write then head so a notarytool failure (e.g. 403) is not hidden by the pipeline,
+          # and a long success listing cannot fail the step via SIGPIPE from head.
+          xcrun notarytool history --apple-id "$AID" --password "$APW" --team-id "$TID" > "$RUNNER_TEMP/notary-history.txt"
+          head -20 "$RUNNER_TEMP/notary-history.txt"
 
   bridge:
+    if: ${{ inputs.reuse_run_id == '' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -64,6 +75,7 @@ jobs:
             ./flutter/macos/Runner/bridge_generated.h
 
   build:
+    if: ${{ inputs.reuse_run_id == '' }}
     needs: [bridge, notary-check]
     strategy:
       fail-fast: false
@@ -146,9 +158,10 @@ jobs:
           path: app-${{ matrix.job.arch }}.zip
 
   universal:
-    needs: build
-    # b88: macos-15 arm64 capacity starved; run on Intel and fall back to x86_64-only if arm64 failed
-    if: ${{ !cancelled() }}
+    needs: [notary-check, build]
+    # b88: macos-15 arm64 capacity starved; run on Intel and fall back to x86_64-only if arm64 failed.
+    # always() so this job still evaluates when build is skipped (reuse_run_id). notary-check must succeed.
+    if: ${{ always() && !cancelled() && needs.notary-check.result == 'success' && (inputs.reuse_run_id != '' || needs.build.result != 'skipped') }}
     timeout-minutes: 150
     runs-on: macos-15-intel
     steps:
@@ -157,6 +170,8 @@ jobs:
         with:
           pattern: app-*
           merge-multiple: true
+          run-id: ${{ inputs.reuse_run_id || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Merge into universal app (lipo every Mach-O that differs)
         run: |
           test -f app-x86_64.zip || { echo "x86_64 slice missing"; exit 1; }
@@ -208,7 +223,12 @@ jobs:
           AID: ${{ secrets.APPLE_ID }}
           APW: ${{ secrets.APPLE_APP_PASSWORD }}
           TID: ${{ secrets.APPLE_TEAM_ID }}
-        run: xcrun notarytool history --apple-id "$AID" --password "$APW" --team-id "$TID" | head -20
+        run: |
+          set -euo pipefail
+          # Write then head so a notarytool failure (e.g. 403) is not hidden by the pipeline,
+          # and a long success listing cannot fail the step via SIGPIPE from head.
+          xcrun notarytool history --apple-id "$AID" --password "$APW" --team-id "$TID" > "$RUNNER_TEMP/notary-history.txt"
+          head -20 "$RUNNER_TEMP/notary-history.txt"
       - name: Codesign app (inside-out, hardened runtime)
         run: |
           xattr -cr "${APP}"
