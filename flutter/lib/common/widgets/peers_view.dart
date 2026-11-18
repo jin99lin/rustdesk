@@ -249,14 +249,20 @@ class _PeersViewState extends State<_PeersView>
               // No need to listen the currentTab change event.
               // Because the currentTab change event will trigger the peers change event,
               // and the peers change event will trigger _buildPeersView().
+              // b104: address-book cards are taller to fit the "Merchant - Store" line.
+              final ab = widget.peerTabIndex == PeerTabIndex.ab;
               return !isPortrait
                   ? Obx(() => peerCardUiType.value == PeerUiType.list
-                      ? Container(height: 45, child: visibilityChild)
+                      ? Container(height: ab ? 72 : 45, child: visibilityChild)
                       : peerCardUiType.value == PeerUiType.grid
                           ? SizedBox(
-                              width: 220, height: 140, child: visibilityChild)
+                              width: 220,
+                              height: ab ? 162 : 140,
+                              child: visibilityChild)
                           : SizedBox(
-                              width: 220, height: 42, child: visibilityChild))
+                              width: 220,
+                              height: ab ? 62 : 42,
+                              child: visibilityChild))
                   : Container(child: visibilityChild);
             }
 
@@ -394,7 +400,10 @@ class _PeersViewState extends State<_PeersView>
 
     // Adoluna b80: address book — online first, offline last (stable)
     if (widget.peerTabIndex == PeerTabIndex.ab) {
-      peers = [...peers.where((p) => p.online), ...peers.where((p) => !p.online)];
+      peers = [
+        ...peers.where((p) => p.online),
+        ...peers.where((p) => !p.online)
+      ];
     }
     searchText = searchText.trim();
     if (searchText.isEmpty) {

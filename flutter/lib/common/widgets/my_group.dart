@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/common/widgets/login.dart';
@@ -94,27 +92,31 @@ class _MyGroupState extends State<MyGroup> {
   }
 
   Widget _buildPortrait() {
+    // b103: fill available height instead of LimitedBox(max(height/6, 100))
     return Column(
       children: [
-        Container(
-          decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(6),
-              border:
-                  Border.all(color: Theme.of(context).colorScheme.background)),
+        Expanded(
+          flex: 3,
           child: Container(
+            decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: Theme.of(context).colorScheme.background)),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
               children: [
                 _buildLeftHeader(),
-                Container(
-                  width: double.infinity,
-                  child: _buildLeftList(),
+                Expanded(
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: _buildLeftList(),
+                  ),
                 )
               ],
             ),
-          ),
-        ).marginOnly(bottom: 12.0),
+          ).marginOnly(bottom: 12.0),
+        ),
         Expanded(
+          flex: 2,
           child: Align(
               alignment: Alignment.topLeft,
               child: MyGroupPeerView(
@@ -178,17 +180,13 @@ class _MyGroupState extends State<MyGroup> {
         }
         return true;
       }).toList();
-      listView(bool isPortrait) => ListView.builder(
-          shrinkWrap: isPortrait,
+      final listView = ListView.builder(
           itemCount: deviceGroupItems.length + userItems.length,
           itemBuilder: (context, index) => index < deviceGroupItems.length
               ? _buildDeviceGroupItem(deviceGroupItems[index])
               : _buildUserItem(userItems[index - deviceGroupItems.length],
                   displayNameCount));
-      var maxHeight = max(MediaQuery.of(context).size.height / 6, 100.0);
-      return Obx(() => stateGlobal.isPortrait.isFalse
-          ? listView(false)
-          : LimitedBox(maxHeight: maxHeight, child: listView(true)));
+      return listView;
     });
   }
 
@@ -196,10 +194,9 @@ class _MyGroupState extends State<MyGroup> {
     final username = user.name;
     final dn = user.displayNameOrName;
     final isDuplicate = (displayNameCount[dn] ?? 0) > 1;
-    final displayName =
-        isDuplicate && user.displayName.trim().isNotEmpty
-            ? '${user.displayName} (@$username)'
-            : dn;
+    final displayName = isDuplicate && user.displayName.trim().isNotEmpty
+        ? '${user.displayName} (@$username)'
+        : dn;
     return InkWell(onTap: () {
       isSelectedDeviceGroup.value = false;
       if (selectedAccessibleItemName.value != username) {
