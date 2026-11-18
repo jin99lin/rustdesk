@@ -70,7 +70,8 @@ jobs:
       matrix:
         job:
           - { target: x86_64-apple-darwin, os: macos-15-intel, arch: x86_64, extra: "" }
-          - { target: aarch64-apple-darwin, os: macos-14, arch: aarch64, extra: "--screencapturekit" }
+          # macos-14 retired 2026-11-02; use macos-15 (arm64) so the universal dmg still has an arm64 slice.
+          - { target: aarch64-apple-darwin, os: macos-15, arch: aarch64, extra: "--screencapturekit" }
     runs-on: ${{ matrix.job.os }}
     steps:
       - uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
