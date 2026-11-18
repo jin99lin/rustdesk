@@ -114,6 +114,9 @@ class PeerTabModel with ChangeNotifier {
     if (_currentTab < 0 || _currentTab >= maxTabCount) {
       _currentTab = 0;
     }
+    // Adoluna b104: remove Accessible devices / device-group tab on all platforms.
+    isEnabled[PeerTabIndex.group.index] = false;
+    _isVisible[PeerTabIndex.group.index] = false;
     _trySetCurrentTabToFirstVisibleEnabled();
   }
 
@@ -217,6 +220,10 @@ class PeerTabModel with ChangeNotifier {
   }
 
   setTabVisible(int index, bool visible) {
+    // Adoluna b104: the device-group tab cannot be turned back on.
+    if (index == PeerTabIndex.group.index) {
+      visible = false;
+    }
     if (index >= 0 && index < maxTabCount) {
       if (_isVisible[index] != visible) {
         _isVisible[index] = visible;

@@ -138,6 +138,19 @@ class _PeerCardState extends State<_PeerCard>
     return formatID(peer.id);
   }
 
+  // b104: "Merchant - Store" from the address-book tag "Merchant · Store".
+  String? _adolunaStoreLine(Peer peer) {
+    if (!_adolunaAb) return null;
+    for (final t in peer.tags) {
+      final s = t.toString();
+      final i = s.indexOf(' · ');
+      if (i > 0) {
+        return '${s.substring(0, i)} - ${s.substring(i + 3)}';
+      }
+    }
+    return null;
+  }
+
   bool _showNote(Peer peer) {
     return peerTabShowNote(widget.tab) && peer.note.isNotEmpty;
   }
@@ -204,6 +217,15 @@ class _PeerCardState extends State<_PeerCard>
                           style: Theme.of(context).textTheme.titleSmall,
                         )),
                       ]).marginOnly(top: isPortrait ? 0 : 2),
+                      if (_adolunaStoreLine(peer) != null)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            _adolunaStoreLine(peer)!,
+                            style: greyStyle,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ).marginOnly(left: isPortrait ? 12 : 16),
                       Row(
                         children: [
                           Flexible(
@@ -379,15 +401,35 @@ class _PeerCardState extends State<_PeerCard>
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Expanded(
-                          child: Row(children: [
-                        getOnline(8, peer.online),
-                        Expanded(
-                            child: Text(
-                          _adolunaTitle(peer),
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleSmall,
-                        )),
-                      ]).paddingSymmetric(vertical: 8)),
+                          child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(children: [
+                            getOnline(8, peer.online),
+                            Expanded(
+                                child: Text(
+                              _adolunaTitle(peer),
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            )),
+                          ]),
+                          if (_adolunaStoreLine(peer) != null)
+                            Text(
+                              _adolunaStoreLine(peer)!,
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: Theme.of(context)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.color
+                                      ?.withOpacity(0.6)),
+                              overflow: TextOverflow.ellipsis,
+                            ).marginOnly(left: 16),
+                        ],
+                      ).paddingSymmetric(
+                              vertical:
+                                  _adolunaStoreLine(peer) != null ? 6 : 8)),
                       checkBoxOrActionMoreLandscape(peer, isTile: false),
                     ],
                   ).paddingSymmetric(horizontal: 12.0),
