@@ -1016,22 +1016,108 @@ pub fn mac_root_poll() {
 
 #[cfg(target_os = "macos")]
 fn mac_install_dmg(dmg: &str) -> ResultType<()> {
-    let app = format!("{}.app", crate::get_app_name());
+    // Root LaunchDaemon installs the new bundle, then quits and reopens the
+    // user-level app (GUI and --server) as each logged-in GUI user.  Without
+    // this, About / heartbeat keep reporting the old build.  The script is
+    // detached so a later kickstart of our own service cannot kill it mid-way.
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    let name = crate::get_app_name();
+    let app = format!("{name}.app");
+    let app_path = format!("/Applications/{app}");
+    let display = crate::get_app_display_name();
     let script = format!(
         r#"set -e
+LOG=/Users/Shared/AdolunaSupport/update-install.log
+/bin/mkdir -p /Users/Shared/AdolunaSupport
+exec >>"$LOG" 2>&1
+echo "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) start dmg={dmg}"
+
 M=$(/usr/bin/mktemp -d /tmp/.adl-mnt-XXXXXX)
 /usr/bin/hdiutil attach -nobrowse -readonly -mountpoint "$M" "{dmg}"
-/bin/rm -rf "/Applications/{app}.new"
-/usr/bin/ditto "$M/{app}" "/Applications/{app}.new"
+/bin/rm -rf "{app_path}.new"
+/usr/bin/ditto "$M/{app}" "{app_path}.new"
 /usr/bin/hdiutil detach "$M" -force || true
-/bin/rm -rf "/Applications/{app}.old"
-/bin/mv "/Applications/{app}" "/Applications/{app}.old" || true
-/bin/mv "/Applications/{app}.new" "/Applications/{app}"
-/bin/rm -rf "/Applications/{app}.old" "{dmg}"
-for p in /Library/LaunchDaemons/com.carriez.*.plist /Library/LaunchDaemons/com.adoluna*.plist; do [ -f "$p" ] && /bin/launchctl kickstart -k system/$(/usr/bin/basename "$p" .plist) || true; done
+
+UIDS=""
+GUI_UIDS=""
+add_uid() {{
+  u="$1"
+  case " $UIDS " in *" $u "*) return ;; esac
+  [ -n "$u" ] && [ "$u" -ge 501 ] 2>/dev/null || return 0
+  UIDS="$UIDS $u"
+}}
+add_uid "$(/usr/bin/stat -f%u /dev/console 2>/dev/null || true)"
+for name in $(/usr/bin/who | /usr/bin/awk '{{print $1}}' | /usr/bin/sort -u); do
+  add_uid "$(/usr/bin/id -u "$name" 2>/dev/null || true)"
+done
+
+# Remember who had the foreground app open (not --server / --service).
+for u in $UIDS; do
+  for pid in $(/usr/bin/pgrep -u "$u" -x "{name}" || true); do
+    args=$(/bin/ps -p "$pid" -o args= 2>/dev/null || true)
+    case "$args" in
+      *"/Applications/{app}/"*)
+        case "$args" in
+          *" --service"*|*" --update"*|*" --server"*) ;;
+          *) case " $GUI_UIDS " in *" $u "*) ;; *) GUI_UIDS="$GUI_UIDS $u" ;; esac ;;
+        esac
+        ;;
+    esac
+  done
+done
+
+# Quit user-level processes before swapping the bundle.  Never touch root --service.
+for u in $UIDS; do
+  /bin/launchctl asuser "$u" /usr/bin/osascript -e 'tell application "{display}" to quit' >/dev/null 2>&1 || true
+done
+/bin/sleep 2
+for sig in TERM KILL; do
+  for u in $UIDS; do
+    for pid in $(/usr/bin/pgrep -u "$u" -x "{name}" || true); do
+      args=$(/bin/ps -p "$pid" -o args= 2>/dev/null || true)
+      case "$args" in
+        *"/Applications/{app}/"*)
+          case "$args" in
+            *" --service"*) ;;
+            *) /bin/kill -$sig "$pid" 2>/dev/null || true ;;
+          esac
+          ;;
+      esac
+    done
+  done
+  /bin/sleep 2
+done
+
+/bin/rm -rf "{app_path}.old"
+/bin/mv "{app_path}" "{app_path}.old" || true
+/bin/mv "{app_path}.new" "{app_path}"
+/bin/rm -rf "{app_path}.old" "{dmg}"
+
+for p in /Library/LaunchDaemons/com.carriez.*.plist /Library/LaunchDaemons/com.adoluna*.plist; do
+  [ -f "$p" ] && /bin/launchctl kickstart -k system/$(/usr/bin/basename "$p" .plist) || true
+done
+
+# If we did not see a GUI process, still reopen for the console user so About refreshes.
+if [ -z "$(echo $GUI_UIDS | /usr/bin/tr -d '[:space:]')" ]; then
+  c=$(/usr/bin/stat -f%u /dev/console 2>/dev/null || true)
+  [ -n "$c" ] && [ "$c" -ge 501 ] 2>/dev/null && GUI_UIDS="$c" || true
+fi
+for u in $GUI_UIDS; do
+  [ "$u" -ge 501 ] 2>/dev/null || continue
+  echo "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) open as uid $u"
+  /bin/launchctl asuser "$u" /usr/bin/open -a "{app_path}" || true
+done
+echo "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) done"
 "#
     );
-    std::process::Command::new("/bin/sh").args(["-c", &script]).spawn()?;
+    std::process::Command::new("/bin/sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()?;
     Ok(())
 }
 
