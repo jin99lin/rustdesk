@@ -957,6 +957,8 @@ class InputService : AccessibilityService() {
 
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        // b111: auto-accept our own MediaProjection consent dialog (system UI only)
+        ProjectionAutoAccept.onEvent(this, event)
     }
 
     override fun onServiceConnected() {
@@ -969,6 +971,11 @@ class InputService : AccessibilityService() {
         } else {
             info.flags = FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         }
+        // b111: receive window events so ProjectionAutoAccept can see the system capture-consent dialog
+        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        info.notificationTimeout = 100
         setServiceInfo(info)
         fakeEditTextForTextStateCalculation = EditText(this)
         // Size here doesn't matter, we won't show this view.
