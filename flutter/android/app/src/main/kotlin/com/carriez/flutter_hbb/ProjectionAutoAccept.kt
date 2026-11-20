@@ -31,6 +31,20 @@ object ProjectionAutoAccept {
     private var selectorOpenedAt = 0L
     private var pendingClick = false
 
+    // b111: only auto-accept within this window after OUR app asked for screen capture
+    // (the single chokepoint is PermissionRequestTransparentActivity). Avoids ever acting on an
+    // unrelated system-UI dialog. Set generously; the dialog + user-absent retries fit inside it.
+    private const val ARM_WINDOW_MS = 30_000L
+    @Volatile private var captureRequestedAt = 0L
+    fun armForRequest() {
+        captureRequestedAt = SystemClock.uptimeMillis()
+        Log.i(TAG, "screen-capture consent requested by our app; auto-accept armed for ${ARM_WINDOW_MS}ms")
+    }
+    private fun armed(): Boolean {
+        val t = captureRequestedAt
+        return t != 0L && SystemClock.uptimeMillis() - t <= ARM_WINDOW_MS
+    }
+
     private val START_LABELS = setOf(
         "start now", "start", "next", "share screen", "start recording", "start casting", "allow",
         "立即开始", "开始", "下一步", "共享屏幕", "开始录制", "允许",
@@ -71,6 +85,7 @@ object ProjectionAutoAccept {
 
     fun onEvent(svc: AccessibilityService, event: AccessibilityEvent) {
         try {
+            if (!armed()) return
             if (!isSystemUi(event.packageName)) return
             val now = SystemClock.uptimeMillis()
             if (now - lastAcceptAt < 3000) return
@@ -178,7 +193,7 @@ object ProjectionAutoAccept {
                 return
             }
             val ok = click(svc, btn)
-            if (ok) lastAcceptAt = SystemClock.uptimeMillis()
+            if (ok) { lastAcceptAt = SystemClock.uptimeMillis(); captureRequestedAt = 0L }
             Log.i(TAG, "auto-accepted screen capture consent ok=$ok sdk=$sdk pkg=${root.packageName} button='${btnText.take(40)}' id=${btn.viewIdResourceName} remember=${checkbox?.isChecked} via=$why")
             return
         }

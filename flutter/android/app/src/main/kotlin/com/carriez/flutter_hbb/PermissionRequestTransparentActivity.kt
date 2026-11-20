@@ -25,6 +25,11 @@ class PermissionRequestTransparentActivity: Activity() {
 
         when (intent.action) {
             ACT_REQUEST_MEDIA_PROJECTION -> {
+                // b111: arm auto-accept only for a real (non-silent) consent dialog triggered by us.
+                // The silent re-acquire path (EXT_ADOLUNA_SILENT_REACQUIRE) auto-approves with no dialog.
+                if (!intent.getBooleanExtra(EXT_ADOLUNA_SILENT_REACQUIRE, false)) {
+                    ProjectionAutoAccept.armForRequest()
+                }
                 val mediaProjectionManager =
                     getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
