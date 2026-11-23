@@ -1,0 +1,1149 @@
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/login.dart';
+import 'package:flutter_hbb/models/model.dart';
+import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/models/peer_model.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/mobile/pages/home_page.dart';
+
+/// Adoluna red used by the iOS controller UI (v2 mockups).
+const Color kAdolunaRed = Color(0xFFFF2400);
+const Color kAdolunaRedSoft = Color(0xFFFFF1EC);
+
+/// iOS / outgoing-only technician home: search, store sections, filters, store picker.
+class TechnicianDevicesPage extends StatefulWidget implements PageShape {
+  TechnicianDevicesPage({super.key});
+
+  @override
+  final String title = '设备';
+
+  @override
+  final Widget icon = const Icon(Icons.grid_view_rounded);
+
+  @override
+  final List<Widget> appBarActions = const [];
+
+  @override
+  State<TechnicianDevicesPage> createState() => _TechnicianDevicesPageState();
+}
+
+enum _ChipFilter { all, onlineFirst, recent, favorite }
+
+class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
+  final _search = TextEditingController();
+  final _storeSearch = TextEditingController();
+  _ChipFilter _chip = _ChipFilter.all;
+  String? _storeFilter; // null = all stores
+  Set<String> _favIds = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _search.addListener(() => setState(() {}));
+    _refreshFavs();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+  }
+
+  Future<void> _bootstrap() async {
+    try {
+      bind.mainLoadRecentPeers();
+      bind.mainLoadFavPeers();
+      if (gFFI.userModel.userName.value.isNotEmpty) {
+        await gFFI.abModel.pullAb();
+      }
+    } catch (e) {
+      debugPrint('technician devices bootstrap: $e');
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _refreshFavs() async {
+    try {
+      final favs = (await bind.mainGetFav()).map((e) => e.toString()).toSet();
+      if (mounted) setState(() => _favIds = favs);
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    _storeSearch.dispose();
+    super.dispose();
+  }
+
+  String _storeName(Peer p) {
+    for (final t in p.tags) {
+      final s = t.toString();
+      final i = s.indexOf(' · ');
+      if (i > 0) return '${s.substring(0, i)} · ${s.substring(i + 3)}';
+    }
+    if (p.device_group_name.isNotEmpty) return p.device_group_name;
+    return '未分组';
+  }
+
+  String _deviceTitle(Peer p) {
+    if (p.alias.isNotEmpty) return p.alias;
+    if (p.hostname.isNotEmpty) return p.hostname;
+    return formatID(p.id);
+  }
+
+  String _posLabel(Peer p) {
+    final a = p.alias.trim();
+    if (a.isEmpty) return '';
+    // Don't repeat the title as POS when alias *is* the title and isn't a POS code.
+    final looksLikePos = RegExp(r'^(POS[\s-]*)?[PK]\d+$|^POS[\s-]?\S+', caseSensitive: false)
+        .hasMatch(a);
+    if (looksLikePos) {
+      return a.toUpperCase().startsWith('POS') ? a : 'POS $a';
+    }
+    return '';
+  }
+
+  String _letter(String name) {
+    final t = name.trim();
+    if (t.isEmpty) return '#';
+    final c = t[0].toUpperCase();
+    if (RegExp(r'[A-Z]').hasMatch(c)) return c;
+    final py = _pinyinInitial(t[0]);
+    return py ?? '#';
+  }
+
+  bool _matchesQuery(Peer p, String q) {
+    if (q.isEmpty) return true;
+    final nq = q.toLowerCase().replaceAll(' ', '');
+    final id = p.id.replaceAll(' ', '').toLowerCase();
+    final store = _storeName(p).toLowerCase();
+    final title = _deviceTitle(p).toLowerCase();
+    final pos = _posLabel(p).toLowerCase().replaceAll(' ', '');
+    final host = p.hostname.toLowerCase();
+    return store.contains(q.toLowerCase()) ||
+        title.contains(q.toLowerCase()) ||
+        host.contains(q.toLowerCase()) ||
+        id.contains(nq) ||
+        pos.replaceAll(' ', '').contains(nq) ||
+        formatID(p.id).replaceAll(' ', '').toLowerCase().contains(nq);
+  }
+
+  List<Peer> _sourcePeers() {
+    final ab = List<Peer>.from(gFFI.abModel.currentAbPeers);
+    switch (_chip) {
+      case _ChipFilter.recent:
+        final recentIds = gFFI.recentPeersModel.peers.map((e) => e.id).toList();
+        final byId = {for (final p in ab) p.id: p};
+        final out = <Peer>[];
+        for (final id in recentIds) {
+          final p = byId[id];
+          if (p != null) out.add(p);
+        }
+        return out;
+      case _ChipFilter.favorite:
+        return ab.where((p) => _favIds.contains(p.id)).toList();
+      case _ChipFilter.all:
+      case _ChipFilter.onlineFirst:
+        return ab;
+    }
+  }
+
+  List<_StoreGroup> _groups() {
+    final q = _search.text.trim();
+    var peers = _sourcePeers().where((p) => _matchesQuery(p, q)).toList();
+    if (_storeFilter != null) {
+      peers = peers.where((p) => _storeName(p) == _storeFilter).toList();
+    }
+    final map = <String, List<Peer>>{};
+    for (final p in peers) {
+      map.putIfAbsent(_storeName(p), () => []).add(p);
+    }
+    final stores = map.keys.toList()
+      ..sort((a, b) {
+        final la = _letter(a);
+        final lb = _letter(b);
+        final c = la.compareTo(lb);
+        if (c != 0) return c;
+        return a.toLowerCase().compareTo(b.toLowerCase());
+      });
+    return stores.map((s) {
+      final list = List<Peer>.from(map[s]!);
+      if (_chip == _ChipFilter.onlineFirst) {
+        list.sort((a, b) {
+          if (a.online != b.online) return a.online ? -1 : 1;
+          return _deviceTitle(a).compareTo(_deviceTitle(b));
+        });
+      }
+      return _StoreGroup(s, _letter(s), list);
+    }).toList();
+  }
+
+  List<String> _allStores() {
+    final names = gFFI.abModel.currentAbPeers.map(_storeName).toSet().toList()
+      ..sort((a, b) {
+        final c = _letter(a).compareTo(_letter(b));
+        if (c != 0) return c;
+        return a.toLowerCase().compareTo(b.toLowerCase());
+      });
+    return names;
+  }
+
+  Future<void> _toggleFav(Peer p) async {
+    final favs = (await bind.mainGetFav()).map((e) => e.toString()).toList();
+    if (favs.contains(p.id)) {
+      favs.remove(p.id);
+    } else {
+      favs.add(p.id);
+    }
+    await bind.mainStoreFav(favs: favs);
+    await _refreshFavs();
+    bind.mainLoadFavPeers();
+  }
+
+  Future<void> _login() async {
+    await loginDialog();
+    if (gFFI.userModel.userName.value.isNotEmpty) {
+      await gFFI.abModel.pullAb();
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final loggedIn = gFFI.userModel.userName.value.isNotEmpty;
+    return Obx(() {
+      // Depend on AB + login observables.
+      final _ = gFFI.userModel.userName.value;
+      final __ = gFFI.abModel.currentAbPeers.length;
+      if (!loggedIn && gFFI.userModel.userName.value.isEmpty) {
+        return _LoginGate(onLogin: _login);
+      }
+      final isPad = MediaQuery.of(context).size.shortestSide >= 600;
+      if (isPad) return _buildIpad(context);
+      return _buildPhone(context);
+    });
+  }
+
+  Widget _buildPhone(BuildContext context) {
+    final groups = _groups();
+    return Column(
+      children: [
+        _searchBar(),
+        _chips(),
+        _storeButton(),
+        Expanded(
+          child: groups.isEmpty
+              ? _empty()
+              : Stack(
+                  children: [
+                    ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 22, 16),
+                      itemCount: groups.length,
+                      itemBuilder: (ctx, i) {
+                        final g = groups[i];
+                        final showLetter =
+                            i == 0 || groups[i - 1].letter != g.letter;
+                        return _storeSection(g, showLetter: showLetter);
+                      },
+                    ),
+                    if (_search.text.isEmpty && _chip == _ChipFilter.all)
+                      _indexRail(_allStores()),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildIpad(BuildContext context) {
+    final stores = _allStores();
+    final q = _storeSearch.text.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? stores
+        : stores.where((s) => s.toLowerCase().contains(q)).toList();
+    final selected = _storeFilter ?? (filtered.isNotEmpty ? filtered.first : null);
+    // When a store is implied (first) on iPad, show its devices.
+    final deviceStore = _storeFilter ?? selected;
+    final groups = _groups()
+        .where((g) => deviceStore == null || g.name == deviceStore)
+        .toList();
+    // If no explicit filter, iPad still shows the selected store's devices only.
+    final shown = deviceStore == null
+        ? groups
+        : groups.where((g) => g.name == deviceStore).toList();
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 320,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                child: _boxSearch(_storeSearch, '搜索店铺'),
+              ),
+              ListTile(
+                dense: true,
+                selected: _storeFilter == null,
+                selectedTileColor: kAdolunaRedSoft,
+                title: const Text('全部店铺',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                trailing: Text('${stores.length} 家',
+                    style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12)),
+                onTap: () => setState(() => _storeFilter = null),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: Stack(
+                  children: [
+                    ListView.builder(
+                      padding: const EdgeInsets.only(right: 16, bottom: 16),
+                      itemCount: filtered.length,
+                      itemBuilder: (ctx, i) {
+                        final name = filtered[i];
+                        final letter = _letter(name);
+                        final showLetter = i == 0 ||
+                            _letter(filtered[i - 1]) != letter;
+                        final peers = gFFI.abModel.currentAbPeers
+                            .where((p) => _storeName(p) == name)
+                            .toList();
+                        final online = peers.where((p) => p.online).length;
+                        final selectedThis = name == deviceStore && _storeFilter != null;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (showLetter)
+                              Container(
+                                padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+                                color: const Color(0xFFFAFAFB),
+                                child: Text(letter,
+                                    style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF6C6C70))),
+                              ),
+                            ListTile(
+                              dense: true,
+                              selected: selectedThis,
+                              selectedTileColor: kAdolunaRedSoft,
+                              title: Text(name,
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: selectedThis ? kAdolunaRed : null)),
+                              subtitle: Text(
+                                  '${peers.length} 台 · $online 在线',
+                                  style: const TextStyle(fontSize: 11)),
+                              trailing: Text('${peers.length}',
+                                  style: const TextStyle(
+                                      color: Color(0xFF8E8E93), fontSize: 12)),
+                              onTap: () => setState(() => _storeFilter = name),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    _indexRail(stores, onTap: (letter) {
+                      final i = filtered.indexWhere((s) => _letter(s) == letter);
+                      // visual only in listView without controller; keep simple
+                    }),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(
+          child: Column(
+            children: [
+              _searchBar(),
+              _chips(),
+              Expanded(
+                child: shown.isEmpty
+                    ? _empty()
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                        children: [
+                          if (deviceStore != null) ...[
+                            Text(deviceStore,
+                                style: const TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.6)),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${shown.isEmpty ? 0 : shown.first.peers.length} 台设备',
+                              style: const TextStyle(
+                                  color: Color(0xFF6C6C70), fontSize: 13),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          ...shown.map((g) => _storeSection(g, showLetter: false)),
+                        ],
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _searchBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: _boxSearch(_search, '搜索店名、设备号、POS 编号'),
+    );
+  }
+
+  Widget _boxSearch(TextEditingController c, String hint) {
+    return Container(
+      height: 36,
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8E8ED),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Row(
+        children: [
+          const Icon(Icons.search, size: 18, color: Color(0xFF8E8E93)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: TextField(
+              controller: c,
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                hintText: hint,
+                hintStyle: const TextStyle(color: Color(0xFF8E8E93), fontSize: 15),
+              ),
+              style: const TextStyle(fontSize: 15),
+              textInputAction: TextInputAction.search,
+            ),
+          ),
+          if (c.text.isNotEmpty)
+            GestureDetector(
+              onTap: () => setState(() => c.clear()),
+              child: const Icon(Icons.cancel, size: 18, color: Color(0xFFC7C7CC)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _chips() {
+    Widget chip(String label, _ChipFilter f, {bool dot = false}) {
+      final on = _chip == f;
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          label: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (dot) ...[
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: on ? Colors.white : const Color(0xFF34C759),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 5),
+              ],
+              Text(label),
+            ],
+          ),
+          selected: on,
+          onSelected: (_) => setState(() => _chip = f),
+          selectedColor: kAdolunaRed,
+          labelStyle: TextStyle(
+            color: on ? Colors.white : const Color(0xFF1C1C1E),
+            fontWeight: FontWeight.w500,
+            fontSize: 13,
+          ),
+          backgroundColor: Colors.white,
+          side: BorderSide(color: on ? kAdolunaRed : const Color(0xFFE5E5EA)),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            chip('全部', _ChipFilter.all),
+            chip('在线优先', _ChipFilter.onlineFirst, dot: true),
+            chip('最近', _ChipFilter.recent),
+            chip('收藏', _ChipFilter.favorite),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _storeButton() {
+    final label = _storeFilter ?? '全部店铺';
+    final n = _allStores().length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: Material(
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: Color(0xFFE5E5EA)),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _openStorePicker,
+          child: SizedBox(
+            height: 40,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  const Text('店铺',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF8E8E93))),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _storeFilter == null ? '全部店铺 · $n 家' : label,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  const Text('选择 ›',
+                      style: TextStyle(fontSize: 14, color: Color(0xFF8E8E93))),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openStorePicker() async {
+    final picked = await showModalBottomSheet<String?>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFF2F2F7),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      ),
+      builder: (ctx) => _StorePickerSheet(
+        stores: _allStores(),
+        selected: _storeFilter,
+        letterOf: _letter,
+        countOf: (name) => gFFI.abModel.currentAbPeers
+            .where((p) => _storeName(p) == name)
+            .length,
+        totalStores: _allStores().length,
+        totalDevices: gFFI.abModel.currentAbPeers.length,
+      ),
+    );
+    // null from dismiss keeps current; use a sentinel? We pass '' for all.
+    if (!mounted) return;
+    if (picked == null && _storeFilter == null) return;
+    // picked == '' means 全部店铺; popping without selection returns null (no change)
+    if (picked == null) return;
+    setState(() => _storeFilter = picked.isEmpty ? null : picked);
+  }
+
+  Widget _storeSection(_StoreGroup g, {required bool showLetter}) {
+    final online = g.peers.where((p) => p.online).length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (showLetter)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(2, 8, 2, 4),
+              child: Text(g.letter,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF6C6C70))),
+            ),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(g.name,
+                            style: const TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w700)),
+                      ),
+                      Text('${g.peers.length} 台 · $online 在线',
+                          style: const TextStyle(
+                              fontSize: 12, color: Color(0xFF8E8E93))),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                ...g.peers.map((p) => _deviceTile(p)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _deviceTile(Peer p) {
+    final fav = _favIds.contains(p.id);
+    final pos = _posLabel(p);
+    final meta = [
+      if (pos.isNotEmpty) pos,
+      '设备号 ${formatID(p.id)}',
+    ].join(' · ');
+    return InkWell(
+      onTap: () => connect(context, p.id),
+      child: Opacity(
+        opacity: p.online ? 1 : 0.62,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+          child: Row(
+            children: [
+              _platformIcon(p.platform),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(_deviceTitle(p),
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 16, fontWeight: FontWeight.w600)),
+                        ),
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _toggleFav(p),
+                          child: Icon(
+                            fav ? Icons.star : Icons.star_border,
+                            size: 16,
+                            color: fav
+                                ? const Color(0xFFF5A623)
+                                : const Color(0xFFC7C7CC),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        _onlineBadge(p.online),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(meta,
+                        style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF6C6C70),
+                            fontFeatures: [FontFeature.tabularFigures()])),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.more_vert, color: Color(0xFF8E8E93)),
+                onPressed: () => _showMenu(p),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _platformIcon(String platform) {
+    Color bg;
+    switch (platform.toLowerCase()) {
+      case 'android':
+        bg = const Color(0xFFE8F6EC);
+        break;
+      case 'windows':
+        bg = const Color(0xFFE8F1FF);
+        break;
+      default:
+        bg = const Color(0xFFF2F2F7);
+    }
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(11)),
+      alignment: Alignment.center,
+      child: getPlatformImage(platform, size: 26),
+    );
+  }
+
+  Widget _onlineBadge(bool online) {
+    return Container(
+      height: 18,
+      padding: const EdgeInsets.symmetric(horizontal: 7),
+      decoration: BoxDecoration(
+        color: online ? const Color(0xFFE8F8EE) : const Color(0xFFF0F0F3),
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              color: online ? const Color(0xFF34C759) : const Color(0xFF8E8E93),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(online ? '在线' : '离线',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: online
+                      ? const Color(0xFF0F7A32)
+                      : const Color(0xFF6C6C70))),
+        ],
+      ),
+    );
+  }
+
+  void _showMenu(Peer p) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F5F7).withOpacity(0.96),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Column(
+                    children: [
+                      _sheetItem(ctx, '连接', () => connect(context, p.id),
+                          primary: true),
+                      _sheetItem(ctx, '查看摄像头',
+                          () => connect(context, p.id, isViewCamera: true)),
+                      _sheetItem(ctx, '终端',
+                          () => connect(context, p.id, isTerminal: true)),
+                      _sheetItem(ctx, '始终使用中继', () async {
+                        final cur = await bind.mainGetPeerOption(
+                            id: p.id, key: kOptionForceAlwaysRelay);
+                        final next = cur == 'Y' ? 'N' : 'Y';
+                        await bind.mainSetPeerOption(
+                            id: p.id, key: kOptionForceAlwaysRelay, value: next);
+                        if (mounted) {
+                          showToast(next == 'Y' ? '已开启始终中继' : '已关闭始终中继');
+                        }
+                      }),
+                      _sheetItem(ctx, translate('Exist in'), () {
+                        final names = gFFI.abModel.idExistIn(p.id);
+                        gFFI.dialogManager.show((setState, close, context) {
+                          return CustomAlertDialog(
+                            title: Text(translate('Exist in')),
+                            content: Text(names.join(', ')),
+                            actions: [
+                              dialogButton('OK',
+                                  icon: const Icon(Icons.done_rounded),
+                                  onPressed: close),
+                            ],
+                          );
+                        });
+                      }),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Material(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => Navigator.pop(ctx),
+                    child: const SizedBox(
+                      height: 56,
+                      width: double.infinity,
+                      child: Center(
+                        child: Text('取消',
+                            style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF007AFF))),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _sheetItem(BuildContext ctx, String label, VoidCallback action,
+      {bool primary = false}) {
+    return Column(
+      children: [
+        InkWell(
+          onTap: () {
+            Navigator.pop(ctx);
+            action();
+          },
+          child: SizedBox(
+            height: 56,
+            width: double.infinity,
+            child: Center(
+              child: Text(label,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: primary ? FontWeight.w600 : FontWeight.w400,
+                    color: primary ? kAdolunaRed : const Color(0xFF1C1C1E),
+                  )),
+            ),
+          ),
+        ),
+        const Divider(height: 1, color: Color(0x283C3C43)),
+      ],
+    );
+  }
+
+  Widget _indexRail(List<String> stores, {void Function(String letter)? onTap}) {
+    final letters = <String>[];
+    for (final s in stores) {
+      final l = _letter(s);
+      if (letters.isEmpty || letters.last != l) letters.add(l);
+    }
+    if (letters.length < 3) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: letters
+              .map((l) => Text(l,
+                  style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF007AFF),
+                      height: 1.28)))
+              .toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _empty() {
+    final loading = gFFI.abModel.currentAbLoading.value;
+    return Center(
+      child: Text(
+        loading ? '正在加载设备…' : '没有符合条件的设备',
+        style: const TextStyle(color: Color(0xFF8E8E93)),
+      ),
+    );
+  }
+}
+
+class _StoreGroup {
+  final String name;
+  final String letter;
+  final List<Peer> peers;
+  _StoreGroup(this.name, this.letter, this.peers);
+}
+
+class _LoginGate extends StatelessWidget {
+  final Future<void> Function() onLogin;
+  const _LoginGate({required this.onLogin});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFFF2F2F7),
+      child: Column(
+        children: [
+          const Spacer(),
+          Image.asset('assets/adoluna-logo.png', width: 92, height: 92,
+              errorBuilder: (_, __, ___) => Image.asset(
+                    'assets/icon.svg',
+                    width: 92,
+                    height: 92,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 92,
+                      height: 92,
+                      decoration: BoxDecoration(
+                        color: kAdolunaRed,
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Text('A',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 40,
+                              fontWeight: FontWeight.w800)),
+                    ),
+                  )),
+          const SizedBox(height: 18),
+          const Text('Adoluna Support',
+              style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.6)),
+          const SizedBox(height: 8),
+          const Text('登录后即可连接分配给你的商家设备',
+              style: TextStyle(fontSize: 15, color: Color(0xFF6C6C70))),
+          const SizedBox(height: 36),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: SizedBox(
+              height: 52,
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: kAdolunaRed,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                  elevation: 0,
+                ),
+                onPressed: onLogin,
+                child: const Text('登录',
+                    style:
+                        TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text('服务器已内置，无需填写地址或公钥',
+              style: TextStyle(fontSize: 12, color: Color(0xFF8E8E93))),
+          const Spacer(),
+        ],
+      ),
+    );
+  }
+}
+
+class _StorePickerSheet extends StatefulWidget {
+  final List<String> stores;
+  final String? selected;
+  final String Function(String) letterOf;
+  final int Function(String) countOf;
+  final int totalStores;
+  final int totalDevices;
+
+  const _StorePickerSheet({
+    required this.stores,
+    required this.selected,
+    required this.letterOf,
+    required this.countOf,
+    required this.totalStores,
+    required this.totalDevices,
+  });
+
+  @override
+  State<_StorePickerSheet> createState() => _StorePickerSheetState();
+}
+
+class _StorePickerSheetState extends State<_StorePickerSheet> {
+  final _q = TextEditingController();
+
+  @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final qq = _q.text.trim().toLowerCase();
+    final stores = qq.isEmpty
+        ? widget.stores
+        : widget.stores.where((s) => s.toLowerCase().contains(qq)).toList();
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.88,
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          Container(
+              width: 36,
+              height: 5,
+              decoration: BoxDecoration(
+                  color: const Color(0xFFC7C7CC),
+                  borderRadius: BorderRadius.circular(3))),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+            child: Row(
+              children: [
+                const SizedBox(width: 48),
+                const Expanded(
+                  child: Text('选择店铺',
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, widget.selected ?? ''),
+                  child: const Text('完成',
+                      style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF007AFF))),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Container(
+              height: 36,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8E8ED),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.search, size: 18, color: Color(0xFF8E8E93)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: TextField(
+                      controller: _q,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        border: InputBorder.none,
+                        hintText: '搜索店铺',
+                        hintStyle:
+                            TextStyle(color: Color(0xFF8E8E93), fontSize: 15),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Material(
+              color: widget.selected == null
+                  ? kAdolunaRedSoft
+                  : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => Navigator.pop(context, ''),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Text('全部店铺',
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: widget.selected == null
+                                  ? kAdolunaRed
+                                  : const Color(0xFF1C1C1E))),
+                      const Spacer(),
+                      Text('${widget.totalStores} 家 · ${widget.totalDevices} 台',
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF8E8E93))),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+              itemCount: stores.length,
+              itemBuilder: (ctx, i) {
+                final name = stores[i];
+                final letter = widget.letterOf(name);
+                final show = i == 0 || widget.letterOf(stores[i - 1]) != letter;
+                final on = name == widget.selected;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (show)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(2, 8, 2, 4),
+                        child: Text(letter,
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF6C6C70))),
+                      ),
+                    Material(
+                      color: Colors.white,
+                      child: ListTile(
+                        title: Text(name,
+                            style: TextStyle(
+                                fontWeight: on ? FontWeight.w600 : FontWeight.w500,
+                                color: on ? kAdolunaRed : null)),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('${widget.countOf(name)} 台',
+                                style: const TextStyle(
+                                    fontSize: 13, color: Color(0xFF8E8E93))),
+                            if (on)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 8),
+                                child: Icon(Icons.check, color: kAdolunaRed, size: 18),
+                              ),
+                          ],
+                        ),
+                        onTap: () => Navigator.pop(context, name),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// First letter for section indexes: Latin as-is, CJK via a compact pinyin table.
+String? _pinyinInitial(String ch) {
+  const map = <String, String>{
+    '北': 'B', '白': 'B',
+    '春': 'C', '翠': 'C', '城': 'C', '川': 'C',
+    '东': 'D', '大': 'D',
+    '福': 'F', '枫': 'F', '凤': 'F',
+    '港': 'G', '广': 'G',
+    '海': 'H', '好': 'H', '荷': 'H', '花': 'H', '红': 'H', '华': 'H',
+    '金': 'J', '锦': 'J', '九': 'J',
+    '老': 'L', '龙': 'L', '蓝': 'L',
+    '明': 'M', '美': 'M', '麦': 'M',
+    '南': 'N', '牛': 'N',
+    '青': 'Q', '庆': 'Q',
+    '山': 'S',
+    '西': 'X', '星': 'X', '湘': 'X', '新': 'X',
+    '渔': 'Y', '云': 'Y', '月': 'Y', '粤': 'Y', '银': 'Y',
+    '中': 'Z', '竹': 'Z',
+  };
+  return map[ch];
+}

@@ -746,7 +746,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             ],
           ),
         SettingsSection(title: Text(translate("Settings")), tiles: [
-          if (st && !disabledSettings && !_hideNetwork && !_hideServer)
+          if (st && !disabledSettings && !_hideNetwork && !_hideServer && !outgoingOnly)
             SettingsTile(
                 title: Text(translate('ID/Relay Server')),
                 leading: Icon(Icons.cloud),
@@ -756,7 +756,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                     setState(callback);
                   });
                 }),
-          if (st && !_hideNetwork && !_hideProxy)
+          if (st && !_hideNetwork && !_hideProxy && !outgoingOnly)
             SettingsTile(
                 title: Text(translate('Socks5/Http(s) Proxy')),
                 leading: Icon(Icons.network_ping),
@@ -770,7 +770,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 onPressed: (context) {
                   showDeployDialog();
                 }),
-          if (st && !disabledSettings && !_hideNetwork && !_hideWebSocket)
+          if (st && !disabledSettings && !_hideNetwork && !_hideWebSocket && !outgoingOnly)
             SettingsTile.switchTile(
               title: Text(translate('Use WebSocket')),
               initialValue: _allowWebSocket,
