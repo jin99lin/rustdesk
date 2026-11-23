@@ -517,6 +517,7 @@ mod desktop {
             Ok(true) => {}
         }
         let ver = format!("b{}", p["build"].as_i64().unwrap_or_default());
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if !crate::updater::has_no_active_conns() && !p["force"].as_bool().unwrap_or(false) {
             hbb_common::bail!("busy: remote session active, retry later");
         }
@@ -552,6 +553,11 @@ mod desktop {
                 .status()?;
             if st.success() { return Ok(Some(format!("updated to {ver}"))); }
             hbb_common::bail!("apt-get failed: {:?}", st.code());
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let _ = (p, ver);
+            hbb_common::bail!("update is not supported on this platform");
         }
     }
 
