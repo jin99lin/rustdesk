@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/login.dart';
 import 'package:flutter_hbb/models/model.dart';
+import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
@@ -52,7 +53,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
       bind.mainLoadRecentPeers();
       bind.mainLoadFavPeers();
       if (gFFI.userModel.userName.value.isNotEmpty) {
-        await gFFI.abModel.pullAb();
+        await gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false);
       }
     } catch (e) {
       debugPrint('technician devices bootstrap: $e');
@@ -202,7 +203,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
   Future<void> _login() async {
     await loginDialog();
     if (gFFI.userModel.userName.value.isNotEmpty) {
-      await gFFI.abModel.pullAb();
+      await gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false);
     }
     if (mounted) setState(() {});
   }
