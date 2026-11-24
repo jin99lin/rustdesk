@@ -812,12 +812,12 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
                   child: InkWell(
                     borderRadius: BorderRadius.circular(14),
                     onTap: () => Navigator.pop(ctx),
-                    child: const SizedBox(
+                    child: SizedBox(
                       height: 56,
                       width: double.infinity,
                       child: Center(
                         child: Text(translate('Cancel'),
-                            style: TextStyle(
+                            style: const TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w600,
                                 color: Color(0xFF007AFF))),
