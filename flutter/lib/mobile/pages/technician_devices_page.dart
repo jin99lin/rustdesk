@@ -119,17 +119,22 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
         .split(',')
         .where((s) => s.isNotEmpty)
         .toSet();
-    var changed = false;
+    if (onlines.isEmpty && offlines.isEmpty) return;
     for (final p in gFFI.abModel.currentAbPeers) {
-      if (onlines.contains(p.id) && !p.online) {
+      if (onlines.contains(p.id)) {
         p.online = true;
-        changed = true;
-      } else if (offlines.contains(p.id) && p.online) {
+      } else if (offlines.contains(p.id)) {
         p.online = false;
-        changed = true;
       }
     }
-    if (changed && mounted) setState(() {});
+    // peersModel also listens to this callback and may have already flipped
+    // the same Peer objects. Always refresh the list so already-built tiles
+    // (the ones at the top of the screen) redraw, not only items rebuilt
+    // after scrolling.
+    if (mounted) {
+      gFFI.abModel.currentAbPeers.refresh();
+      setState(() {});
+    }
   }
 
   void _queryOnlines() {
@@ -323,6 +328,8 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
       final ___ = gFFI.abModel.currentName.value;
       final ____ = gFFI.abModel.currentAbLoading.value;
       final _____ = gFFI.abModel.abPullError.value;
+      // So Obx rebuilds when online flags change and the RxList is refreshed.
+      final ______ = gFFI.abModel.currentAbPeers.where((p) => p.online).length;
       if (gFFI.userModel.userName.value.isEmpty) {
         return _LoginGate(onLogin: _login);
       }
