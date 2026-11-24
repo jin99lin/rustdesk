@@ -1027,13 +1027,11 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
     ].join(' · ');
     return InkWell(
       onTap: () => connect(context, p.id),
-      child: Opacity(
-        opacity: p.online ? 1 : 0.62,
-        child: Padding(
+      child: Padding(
           padding: EdgeInsets.fromLTRB(padLeft, 10, 4, 10),
           child: Row(
             children: [
-              _platformIcon(p.platform),
+              _platformIcon(p.platform, online: p.online),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -1044,8 +1042,12 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
                         Flexible(
                           child: _highlighted(
                             _deviceTitle(p),
-                            style: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: p.online
+                                    ? const Color(0xFF1C1C1E)
+                                    : const Color(0xFF8E8E93)),
                           ),
                         ),
                         const SizedBox(width: 4),
@@ -1066,10 +1068,12 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
                     const SizedBox(height: 2),
                     _highlighted(
                       meta,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12,
-                          color: Color(0xFF6C6C70),
-                          fontFeatures: [FontFeature.tabularFigures()]),
+                          color: p.online
+                              ? const Color(0xFF6C6C70)
+                              : const Color(0xFFAEAEB2),
+                          fontFeatures: const [FontFeature.tabularFigures()]),
                     ),
                   ],
                 ),
@@ -1080,29 +1084,41 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
               ),
             ],
           ),
-        ),
       ),
     );
   }
 
-  Widget _platformIcon(String platform) {
-    Color bg;
-    switch (platform.toLowerCase()) {
-      case 'android':
-        bg = const Color(0xFFE8F6EC);
-        break;
-      case 'windows':
-        bg = const Color(0xFFE8F1FF);
-        break;
-      default:
-        bg = const Color(0xFFF2F2F7);
+  Widget _platformIcon(String platform, {required bool online}) {
+    final p = platform.toLowerCase();
+    late final Color bg;
+    late final Color fg;
+    if (!online) {
+      bg = const Color(0xFFF0F0F3);
+      fg = const Color(0xFF8E8E93);
+    } else if (p == 'android') {
+      // Saturated Android green on a clearly green chip (SVG assets are white).
+      bg = const Color(0xFFC7F0D3);
+      fg = const Color(0xFF3DDC84);
+    } else if (p.contains('mac') || p == 'ios') {
+      bg = const Color(0xFFE5E5EA);
+      fg = const Color(0xFF1C1C1E);
+    } else if (p == 'linux') {
+      bg = const Color(0xFFFFE4C7);
+      fg = const Color(0xFFE95420);
+    } else {
+      // Windows and anything else getPlatformImage maps to win.svg.
+      bg = const Color(0xFFC9DFFF);
+      fg = const Color(0xFF0078D4);
     }
     return Container(
       width: 44,
       height: 44,
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(11)),
       alignment: Alignment.center,
-      child: getPlatformImage(platform, size: 26),
+      child: ColorFiltered(
+        colorFilter: ColorFilter.mode(fg, BlendMode.srcIn),
+        child: getPlatformImage(platform, size: 26),
+      ),
     );
   }
 
