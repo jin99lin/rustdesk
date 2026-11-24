@@ -1069,12 +1069,12 @@ class _StorePickerSheetState extends State<_StorePickerSheet> {
                     child: TextField(
                       controller: _q,
                       onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         isDense: true,
                         border: InputBorder.none,
                         hintText: translate('adoluna-search-stores'),
-                        hintStyle:
-                            TextStyle(color: Color(0xFF8E8E93), fontSize: 15),
+                        hintStyle: const TextStyle(
+                            color: Color(0xFF8E8E93), fontSize: 15),
                       ),
                     ),
                   ),
