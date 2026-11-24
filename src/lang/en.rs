@@ -313,6 +313,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("adoluna-no-devices", "No matching devices"),
         ("adoluna-login-hint", "Sign in to connect the merchant devices assigned to you"),
         ("adoluna-server-builtin", "The server is built in. You don't need to enter an address or public key."),
+        ("adoluna-search-hits", "Found {m} merchants, {s} stores, {d} devices"),
         ("Advanced settings unlocked", "Advanced settings unlocked"),
     ].iter().cloned().collect();
 }

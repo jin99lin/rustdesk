@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -57,6 +58,10 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
   Duration _onlineInterval = const Duration(seconds: 6);
   static const _kQueryOnlines = 'callback_query_onlines';
   static const _kOnlineHandler = 'technician_devices';
+  static const _kOpenMerchants = 'adoluna-open-merchants';
+  static const _kOpenStores = 'adoluna-open-stores';
+  Set<String> _openMerchants = {};
+  Set<String> _openStores = {};
 
   @override
   void initState() {
@@ -66,6 +71,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
       _applyOnlineStates(evt);
     });
     _search.addListener(() => setState(() {}));
+    _loadExpandState();
     _refreshFavs();
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
   }
@@ -301,6 +307,163 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
     return names;
   }
 
+  String _merchantKey(String storeName) {
+    if (storeName == _kUngroupedStore) return storeName;
+    final i = storeName.indexOf(' · ');
+    if (i > 0) return storeName.substring(0, i);
+    return storeName;
+  }
+
+  String _branchLabel(String storeName) {
+    if (storeName == _kUngroupedStore) return _storeLabel(storeName);
+    final i = storeName.indexOf(' · ');
+    if (i > 0) return storeName.substring(i + 3);
+    return _storeLabel(storeName);
+  }
+
+  /// Merchants that have two or more store locations in the full address book.
+  Set<String> _multiMerchants() {
+    final byMerch = <String, Set<String>>{};
+    for (final p in gFFI.abModel.currentAbPeers) {
+      final full = _storeName(p);
+      byMerch.putIfAbsent(_merchantKey(full), () => {}).add(full);
+    }
+    return byMerch.entries
+        .where((e) => e.value.length >= 2)
+        .map((e) => e.key)
+        .toSet();
+  }
+
+  List<_MerchantGroup> _merchantGroups({bool forIndex = false}) {
+    final multi = _multiMerchants();
+    final storeGroups = forIndex
+        ? _groupsFrom(List<Peer>.from(gFFI.abModel.currentAbPeers))
+        : _groups();
+    // When a single store is picked, skip the merchant wrapper and show that store.
+    final skipWrapper = !forIndex && _storeFilter != null;
+    final map = <String, List<_StoreGroup>>{};
+    final order = <String>[];
+    for (final g in storeGroups) {
+      final mk = _merchantKey(g.name);
+      final wrap = !skipWrapper && multi.contains(mk);
+      final key = wrap ? mk : g.name;
+      if (!map.containsKey(key)) {
+        map[key] = [];
+        order.add(key);
+      }
+      map[key]!.add(g);
+    }
+    return order.map((k) {
+      final stores = map[k]!;
+      final wrap = !skipWrapper && multi.contains(_merchantKey(stores.first.name));
+      final name = wrap ? _merchantKey(stores.first.name) : stores.first.name;
+      return _MerchantGroup(
+        name: name,
+        letter: _letter(name),
+        stores: stores,
+        isMerchant: wrap,
+      );
+    }).toList();
+  }
+
+  List<_StoreGroup> _groupsFrom(List<Peer> peers) {
+    final map = <String, List<Peer>>{};
+    for (final p in peers) {
+      map.putIfAbsent(_storeName(p), () => []).add(p);
+    }
+    final stores = map.keys.toList()
+      ..sort((a, b) {
+        final c = _letter(a).compareTo(_letter(b));
+        if (c != 0) return c;
+        return a.toLowerCase().compareTo(b.toLowerCase());
+      });
+    return stores.map((s) {
+      final list = List<Peer>.from(map[s]!);
+      list.sort((a, b) => _deviceTitle(a).compareTo(_deviceTitle(b)));
+      return _StoreGroup(s, _letter(s), list);
+    }).toList();
+  }
+
+  List<String> _indexNames() =>
+      _merchantGroups(forIndex: true).map((g) => g.name).toList();
+
+  bool get _searching => _search.text.trim().isNotEmpty;
+
+  bool _isMerchantOpen(String name) =>
+      _searching || _openMerchants.contains(name);
+
+  bool _isStoreOpen(String name) => _searching || _openStores.contains(name);
+
+  void _loadExpandState() {
+    try {
+      final m = bind.mainGetLocalOption(key: _kOpenMerchants);
+      final s = bind.mainGetLocalOption(key: _kOpenStores);
+      if (m.isNotEmpty) {
+        final decoded = jsonDecode(m);
+        if (decoded is List) {
+          _openMerchants = decoded.map((e) => e.toString()).toSet();
+        }
+      }
+      if (s.isNotEmpty) {
+        final decoded = jsonDecode(s);
+        if (decoded is List) {
+          _openStores = decoded.map((e) => e.toString()).toSet();
+        }
+      }
+    } catch (e) {
+      debugPrint('technician expand state load: $e');
+    }
+  }
+
+  Future<void> _saveExpandState() async {
+    try {
+      await bind.mainSetLocalOption(
+          key: _kOpenMerchants, value: jsonEncode(_openMerchants.toList()));
+      await bind.mainSetLocalOption(
+          key: _kOpenStores, value: jsonEncode(_openStores.toList()));
+    } catch (e) {
+      debugPrint('technician expand state save: $e');
+    }
+  }
+
+  void _toggleMerchant(String name) {
+    setState(() {
+      if (_openMerchants.contains(name)) {
+        _openMerchants.remove(name);
+      } else {
+        _openMerchants.add(name);
+      }
+    });
+    _saveExpandState();
+  }
+
+  void _toggleStore(String name) {
+    setState(() {
+      if (_openStores.contains(name)) {
+        _openStores.remove(name);
+      } else {
+        _openStores.add(name);
+      }
+    });
+    _saveExpandState();
+  }
+
+  int _peerCount(_MerchantGroup g) =>
+      g.stores.fold<int>(0, (n, s) => n + s.peers.length);
+
+  int _onlineCount(_MerchantGroup g) => g.stores
+      .fold<int>(0, (n, s) => n + s.peers.where((p) => p.online).length);
+
+  String _searchHits(List<_MerchantGroup> groups) {
+    final merch = groups.where((g) => g.isMerchant).length;
+    final stores = groups.fold<int>(0, (n, g) => n + g.stores.length);
+    final devices = groups.fold<int>(0, (n, g) => n + _peerCount(g));
+    return translate('adoluna-search-hits')
+        .replaceAll('{m}', '$merch')
+        .replaceAll('{s}', '$stores')
+        .replaceAll('{d}', '$devices');
+  }
+
   Future<void> _toggleFav(Peer p) async {
     final favs = (await bind.mainGetFav()).map((e) => e.toString()).toList();
     if (favs.contains(p.id)) {
@@ -340,7 +503,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
   }
 
   Widget _buildPhone(BuildContext context) {
-    final groups = _groups();
+    final groups = _merchantGroups();
     return Column(
       children: [
         _searchBar(),
@@ -356,16 +519,27 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
                   children: [
                     ListView.builder(
                       padding: const EdgeInsets.fromLTRB(16, 0, 22, 16),
-                      itemCount: groups.length,
+                      itemCount: groups.length + (_searching ? 1 : 0),
                       itemBuilder: (ctx, i) {
+                        if (_searching) {
+                          if (i == 0) {
+                            return Padding(
+                              padding: const EdgeInsets.fromLTRB(2, 0, 2, 8),
+                              child: Text(_searchHits(groups),
+                                  style: const TextStyle(
+                                      fontSize: 12, color: Color(0xFF8E8E93))),
+                            );
+                          }
+                          i -= 1;
+                        }
                         final g = groups[i];
                         final showLetter =
                             i == 0 || groups[i - 1].letter != g.letter;
-                        return _storeSection(g, showLetter: showLetter);
+                        return _merchantSection(g, showLetter: showLetter);
                       },
                     ),
-                    if (_search.text.isEmpty && _chip == _ChipFilter.all)
-                      _indexRail(_allStores()),
+                    if (!_searching && _chip == _ChipFilter.all)
+                      _indexRail(_indexNames()),
                   ],
                 ),
           ),
@@ -387,13 +561,19 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
     final selected = _storeFilter ?? (filtered.isNotEmpty ? filtered.first : null);
     // When a store is implied (first) on iPad, show its devices.
     final deviceStore = _storeFilter ?? selected;
-    final groups = _groups()
-        .where((g) => deviceStore == null || g.name == deviceStore)
-        .toList();
-    // If no explicit filter, iPad still shows the selected store's devices only.
-    final shown = deviceStore == null
-        ? groups
-        : groups.where((g) => g.name == deviceStore).toList();
+    final merchGroups = _merchantGroups()
+        .where((g) => deviceStore == null || g.stores.any((s) => s.name == deviceStore))
+        .map((g) {
+      if (deviceStore == null) return g;
+      final only = g.stores.where((s) => s.name == deviceStore).toList();
+      return _MerchantGroup(
+        name: only.first.name,
+        letter: g.letter,
+        stores: only,
+        isMerchant: false,
+      );
+    }).toList();
+    final shown = merchGroups;
 
     return Row(
       children: [
@@ -495,13 +675,13 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
                                     letterSpacing: -0.6)),
                             const SizedBox(height: 4),
                             Text(
-                              _nDevices(shown.isEmpty ? 0 : shown.first.peers.length),
+                              _nDevices(shown.isEmpty ? 0 : _peerCount(shown.first)),
                               style: const TextStyle(
                                   color: Color(0xFF6C6C70), fontSize: 13),
                             ),
                             const SizedBox(height: 12),
                           ],
-                          ...shown.map((g) => _storeSection(g, showLetter: false)),
+                          ...shown.map((g) => _merchantSection(g, showLetter: false)),
                         ],
                       ),
               ),
@@ -678,8 +858,8 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
     setState(() => _storeFilter = picked.isEmpty ? null : picked);
   }
 
-  Widget _storeSection(_StoreGroup g, {required bool showLetter}) {
-    final online = g.peers.where((p) => p.online).length;
+  Widget _merchantSection(_MerchantGroup g, {required bool showLetter}) {
+    final openMerch = !g.isMerchant || _isMerchantOpen(g.name);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(
@@ -699,34 +879,146 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
               color: Colors.white,
               borderRadius: BorderRadius.circular(14),
             ),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                  child: Row(
+            clipBehavior: Clip.antiAlias,
+            child: g.isMerchant
+                ? Column(
                     children: [
-                      Expanded(
-                        child: Text(_storeLabel(g.name),
-                            style: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.w700)),
+                      _expandRow(
+                        title: g.name,
+                        count: _peerCount(g),
+                        online: _onlineCount(g),
+                        open: openMerch,
+                        onTap: () { if (!_searching) _toggleMerchant(g.name); },
+                        merchant: true,
                       ),
-                      Text(_nDevicesOnline(g.peers.length, online),
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF8E8E93))),
+                      if (openMerch)
+                        ..._storeBlocks(g.stores, nested: true),
                     ],
+                  )
+                : Column(
+                    children: _storeBlocks(g.stores, nested: false),
                   ),
-                ),
-                const Divider(height: 1),
-                ...g.peers.map((p) => _deviceTile(p)),
-              ],
-            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _deviceTile(Peer p) {
+  List<Widget> _storeBlocks(List<_StoreGroup> stores, {required bool nested}) {
+    final out = <Widget>[];
+    for (var i = 0; i < stores.length; i++) {
+      final s = stores[i];
+      final open = _isStoreOpen(s.name);
+      final online = s.peers.where((p) => p.online).length;
+      if (nested && i > 0) {
+        out.add(const Divider(height: 1));
+      }
+      out.add(_expandRow(
+        title: nested ? _branchLabel(s.name) : _storeLabel(s.name),
+        count: s.peers.length,
+        online: online,
+        open: open,
+        onTap: () { if (!_searching) _toggleStore(s.name); },
+        nested: nested,
+      ));
+      if (open) {
+        out.add(const Divider(height: 1));
+        for (var j = 0; j < s.peers.length; j++) {
+          if (j > 0) out.add(const Divider(height: 1));
+          out.add(_deviceTile(s.peers[j], padLeft: nested ? 32 : 12));
+        }
+      }
+    }
+    return out;
+  }
+
+  Widget _expandRow({
+    required String title,
+    required int count,
+    required int online,
+    required bool open,
+    required VoidCallback onTap,
+    bool merchant = false,
+    bool nested = false,
+  }) {
+    return Material(
+      color: merchant ? const Color(0xFFFAFAFB) : Colors.white,
+      child: InkWell(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(nested ? 20 : 8, 10, 12, 10),
+            child: Row(
+              children: [
+                _chevron(open),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: _highlighted(
+                    title,
+                    style: TextStyle(
+                      fontSize: nested ? 15 : 16,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ),
+                Text(_nDevicesOnline(count, online),
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF8E8E93))),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _chevron(bool open) {
+    return AnimatedRotation(
+      turns: open ? 0.25 : 0,
+      duration: const Duration(milliseconds: 160),
+      child: Icon(Icons.chevron_right,
+          size: 18,
+          color: open ? const Color(0xFF8E8E93) : const Color(0xFFC7C7CC)),
+    );
+  }
+
+  Widget _highlighted(String text, {required TextStyle style}) {
+    final q = _search.text.trim();
+    if (q.isEmpty) {
+      return Text(text,
+          maxLines: 1, overflow: TextOverflow.ellipsis, style: style);
+    }
+    final lower = text.toLowerCase();
+    final ql = q.toLowerCase();
+    final spans = <TextSpan>[];
+    var start = 0;
+    while (true) {
+      final i = lower.indexOf(ql, start);
+      if (i < 0) {
+        if (start < text.length) {
+          spans.add(TextSpan(text: text.substring(start), style: style));
+        }
+        break;
+      }
+      if (i > start) {
+        spans.add(TextSpan(text: text.substring(start, i), style: style));
+      }
+      spans.add(TextSpan(
+        text: text.substring(i, i + q.length),
+        style: style.copyWith(color: kAdolunaRed, fontWeight: FontWeight.w800),
+      ));
+      start = i + q.length;
+    }
+    return Text.rich(
+      TextSpan(style: style, children: spans),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  Widget _deviceTile(Peer p, {double padLeft = 12}) {
     final fav = _favIds.contains(p.id);
     final pos = _posLabel(p);
     final meta = [
@@ -738,7 +1030,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
       child: Opacity(
         opacity: p.online ? 1 : 0.62,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+          padding: EdgeInsets.fromLTRB(padLeft, 10, 4, 10),
           child: Row(
             children: [
               _platformIcon(p.platform),
@@ -750,10 +1042,11 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
                     Row(
                       children: [
                         Flexible(
-                          child: Text(_deviceTitle(p),
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w600)),
+                          child: _highlighted(
+                            _deviceTitle(p),
+                            style: const TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w600),
+                          ),
                         ),
                         const SizedBox(width: 4),
                         GestureDetector(
@@ -771,11 +1064,13 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
                       ],
                     ),
                     const SizedBox(height: 2),
-                    Text(meta,
-                        style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF6C6C70),
-                            fontFeatures: [FontFeature.tabularFigures()])),
+                    _highlighted(
+                      meta,
+                      style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6C6C70),
+                          fontFeatures: [FontFeature.tabularFigures()]),
+                    ),
                   ],
                 ),
               ),
@@ -994,6 +1289,19 @@ class _StoreGroup {
   final String letter;
   final List<Peer> peers;
   _StoreGroup(this.name, this.letter, this.peers);
+}
+
+class _MerchantGroup {
+  final String name;
+  final String letter;
+  final List<_StoreGroup> stores;
+  final bool isMerchant;
+  _MerchantGroup({
+    required this.name,
+    required this.letter,
+    required this.stores,
+    required this.isMerchant,
+  });
 }
 
 class _LoginGate extends StatelessWidget {

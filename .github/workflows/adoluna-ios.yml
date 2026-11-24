@@ -180,7 +180,7 @@ jobs:
         run: |
           pushd flutter
           flutter pub get
-          flutter build ios --release --no-codesign --build-number="$((112 + ${{ github.run_number }} - 1))" --build-name="1.5.0"
+          flutter build ios --release --no-codesign --build-number="$((112 + ${{ github.run_number }} - 1))" --build-name="1.5.1"
           popd
 
       - name: Archive (Release, Apple Distribution)
@@ -195,7 +195,7 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath "$RUNNER_TEMP/AdolunaSupport.xcarchive" \
             CURRENT_PROJECT_VERSION=$BUILD \
-            MARKETING_VERSION=1.5.0 \
+            MARKETING_VERSION=1.5.1 \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_IDENTITY="Apple Distribution" \

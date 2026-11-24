@@ -815,6 +815,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("adoluna-no-devices", "没有符合条件的设备"),
         ("adoluna-login-hint", "登录后即可连接分配给你的商家设备"),
         ("adoluna-server-builtin", "服务器已内置，无需填写地址或公钥"),
+        ("adoluna-search-hits", "找到 {m} 家商家，{s} 家分店，共 {d} 台设备"),
         ("Advanced settings unlocked", "已解锁高级设置"),
     ].iter().cloned().collect();
 }
