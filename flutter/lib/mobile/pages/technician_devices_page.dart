@@ -187,11 +187,62 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
   String _nDevicesOnline(int n, int online) =>
       '${translate('{$n} devices')} · $online ${translate('adoluna-online')}';
 
+
+  /// Same rule as address_book.dart b103: prefer 全部商家, then 商家 / Merchants,
+  /// then the first non-empty shared book. Inlined so ab_model.dart stays b111.
+  Future<void> _selectPreferredSharedAb() async {
+    if (gFFI.abModel.legacyMode.value || !gFFI.abModel.listInitialized) return;
+    final names = gFFI.abModel.addressBookNames();
+    if (names.isEmpty) return;
+    final personal = gFFI.abModel.personalAddressBookName();
+    final current = gFFI.abModel.currentName.value;
+    const preferred = ['全部商家 / All Merchants', '商家 / Merchants'];
+    if (preferred.contains(current) ||
+        (current.isNotEmpty &&
+            current != personal &&
+            names.contains(current) &&
+            !(gFFI.abModel.addressbooks[current]?.isPersonal() ?? true))) {
+      if (!gFFI.abModel.current.initialized) {
+        await gFFI.abModel.current.pullAb(quiet: false);
+      }
+      return;
+    }
+    String? pick;
+    for (final n in preferred) {
+      if (names.contains(n)) {
+        pick = n;
+        break;
+      }
+    }
+    if (pick == null) {
+      for (final n in names) {
+        final ab = gFFI.abModel.addressbooks[n];
+        if (ab == null || ab.isPersonal()) continue;
+        if (!ab.initialized) {
+          await ab.pullAb(quiet: true);
+        }
+        if (ab.peers.isNotEmpty) {
+          pick = n;
+          break;
+        }
+      }
+    }
+    pick ??= names.cast<String?>().firstWhere(
+        (n) =>
+            n != personal &&
+            !(gFFI.abModel.addressbooks[n]?.isPersonal() ?? true),
+        orElse: () => null);
+    if (pick != null && pick.isNotEmpty && pick != current) {
+      await gFFI.abModel.setCurrentName(pick);
+      bind.setLocalFlutterOption(k: kOptionCurrentAbName, v: pick);
+    }
+  }
+
   Future<void> _loadBooks() async {
     if (!gFFI.userModel.isLogin) return;
     try {
       await gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false);
-      await gFFI.abModel.selectPreferredSharedAb();
+      await _selectPreferredSharedAb();
       // Keep the shared Peers model on the current book so online callbacks
       // also update the same Peer objects Android uses.
       await platformFFI.tryHandle({'name': 'load_address_book_peers'});
