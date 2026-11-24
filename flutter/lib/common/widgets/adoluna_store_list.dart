@@ -606,28 +606,27 @@ class _AdolunaStoreListState extends State<AdolunaStoreList>
   }
 
   Widget _platformIcon(String platform, {required bool online}) {
-    Color bg;
-    switch (platform.toLowerCase()) {
-      case 'android':
-        bg = online ? const Color(0xFFE8F6EC) : const Color(0xFFE8E8ED);
-        break;
-      case 'windows':
-        bg = online ? const Color(0xFFE8F1FF) : const Color(0xFFE8E8ED);
-        break;
-      default:
-        bg = online ? const Color(0xFFF2F2F7) : const Color(0xFFE8E8ED);
-    }
-    Widget icon = getPlatformImage(platform, size: 22);
+    // Adoluna b113: online = solid brand chip + white glyph (Android #3DDC84,
+    // Windows #0078D4, Apple #1C1C1E), matching the iOS 1.5.2 request.
+    // Offline stays a gray chip with a gray glyph. SVG assets are already white.
+    final p = platform.toLowerCase();
+    late final Color bg;
+    late final Color fg;
     if (!online) {
-      icon = ColorFiltered(
-        colorFilter: const ColorFilter.matrix(<double>[
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0, 0, 0, 0.7, 0,
-        ]),
-        child: icon,
-      );
+      bg = const Color(0xFFF0F0F3);
+      fg = const Color(0xFF8E8E93);
+    } else if (p == 'android') {
+      bg = const Color(0xFF3DDC84);
+      fg = const Color(0xFFFFFFFF);
+    } else if (p.contains('mac') || p == 'ios') {
+      bg = const Color(0xFF1C1C1E);
+      fg = const Color(0xFFFFFFFF);
+    } else if (p == 'linux') {
+      bg = const Color(0xFFE95420);
+      fg = const Color(0xFFFFFFFF);
+    } else {
+      bg = const Color(0xFF0078D4);
+      fg = const Color(0xFFFFFFFF);
     }
     return Container(
       width: 36,
@@ -635,7 +634,10 @@ class _AdolunaStoreListState extends State<AdolunaStoreList>
       decoration:
           BoxDecoration(color: bg, borderRadius: BorderRadius.circular(9)),
       alignment: Alignment.center,
-      child: icon,
+      child: ColorFiltered(
+        colorFilter: ColorFilter.mode(fg, BlendMode.srcIn),
+        child: getPlatformImage(platform, size: 22),
+      ),
     );
   }
 
