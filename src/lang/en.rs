@@ -290,6 +290,16 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("adoluna-staff-pin-wrong", "Wrong staff PIN"),
         ("adoluna-staff-pin-locked", "Too many attempts, try again in 5 minutes"),
         ("adoluna-staff-pin-not-set", "No staff PIN set in the admin yet"),
+        ("{} stores", "{} stores"),
+        ("{} devices", "{} devices"),
+        ("adoluna-search-global", "Search merchant, store, device ID, or POS"),
+        ("adoluna-online", "Online"),
+        ("adoluna-offline", "Offline"),
+        ("adoluna-ungrouped", "Ungrouped"),
+        ("adoluna-device-id", "ID {}"),
+        ("adoluna-loading-devices", "Loading devices…"),
+        ("adoluna-no-devices", "No matching devices"),
+        ("adoluna-search-hits", "Found {m} merchants, {s} stores, {d} devices"),
         ("Advanced settings unlocked", "Advanced settings unlocked"),
     ].iter().cloned().collect();
 }

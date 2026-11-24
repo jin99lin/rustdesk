@@ -6,6 +6,7 @@ import 'package:dynamic_layouts/dynamic_layouts.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
+import 'package:flutter_hbb/common/widgets/adoluna_store_list.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
 import 'package:flutter_hbb/common/widgets/peers_view.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -73,6 +74,22 @@ class _AddressBookState extends State<AddressBook> {
       });
 
   Widget _buildAddressBookLandscape() {
+    // Adoluna b112/b113: Mac and Windows use the full-width merchant > store list.
+    if (isMacOS || isWindows) {
+      _adolunaPickManaged();
+      return Column(
+        children: [
+          SizedBox(
+            height: 40,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(width: 240, child: _buildAbDropdown()),
+            ),
+          ),
+          Expanded(child: AdolunaStoreList(menuPadding: widget.menuPadding)),
+        ],
+      );
+    }
     return Row(
       children: [
         Offstage(
@@ -99,6 +116,22 @@ class _AddressBookState extends State<AddressBook> {
   }
 
   Widget _buildAddressBookPortrait() {
+    // Adoluna b112/b113: Mac and Windows portrait (narrow window) use the same list.
+    if (isMacOS || isWindows) {
+      _adolunaPickManaged();
+      return Column(
+        children: [
+          SizedBox(
+            height: 40,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SizedBox(width: 240, child: _buildAbDropdown()),
+            ),
+          ),
+          Expanded(child: AdolunaStoreList(menuPadding: widget.menuPadding)),
+        ],
+      );
+    }
     const padding = 8.0;
     return Column(
       children: [

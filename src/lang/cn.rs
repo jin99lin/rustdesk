@@ -792,6 +792,16 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("adoluna-staff-pin-wrong", "员工 PIN 错误"),
         ("adoluna-staff-pin-locked", "错误次数过多，请 5 分钟后再试"),
         ("adoluna-staff-pin-not-set", "后台还没有设置员工 PIN，无法解锁"),
+        ("{} stores", "{} 家"),
+        ("{} devices", "{} 台"),
+        ("adoluna-search-global", "搜索商家、店名、设备号、POS 编号"),
+        ("adoluna-online", "在线"),
+        ("adoluna-offline", "离线"),
+        ("adoluna-ungrouped", "未分组"),
+        ("adoluna-device-id", "设备号 {}"),
+        ("adoluna-loading-devices", "正在加载设备…"),
+        ("adoluna-no-devices", "没有符合条件的设备"),
+        ("adoluna-search-hits", "找到 {m} 家商家，{s} 家分店，共 {d} 台设备"),
         ("Advanced settings unlocked", "已解锁高级设置"),
     ].iter().cloned().collect();
 }
