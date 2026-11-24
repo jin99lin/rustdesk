@@ -555,8 +555,13 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   List<Widget> _landscapeRightActions(BuildContext context) {
     final model = Provider.of<PeerTabModel>(context);
+    final macAb = isMacOS && model.currentTab == PeerTabIndex.ab.index;
     return [
-      const PeerSearchBar().marginOnly(right: 13),
+      PeerSearchBar(
+        alwaysExpanded: macAb,
+        width: macAb ? 320 : null,
+        hint: macAb ? translate('adoluna-search-global') : null,
+      ).marginOnly(right: 13),
       _createRefresh(
           index: PeerTabIndex.ab, loading: gFFI.abModel.currentAbLoading),
       _createRefresh(
@@ -565,13 +570,13 @@ class _PeerTabPageState extends State<PeerTabPage>
         offstage: model.currentTabCachedPeers.isEmpty,
         child: _createMultiSelection(),
       ),
-      _createPeerViewTypeSwitch(context),
+      if (!macAb) _createPeerViewTypeSwitch(context),
       Offstage(
         offstage: model.currentTab == PeerTabIndex.recent.index,
         child: PeerSortDropdown(),
       ),
       Offstage(
-        offstage: model.currentTab != PeerTabIndex.ab.index,
+        offstage: model.currentTab != PeerTabIndex.ab.index || macAb,
         child: _toggleTags(),
       ),
     ];
@@ -622,8 +627,13 @@ class _PeerTabPageState extends State<PeerTabPage>
     }
 
     // Always show search, refresh
+    final macAb = isMacOS && model.currentTab == PeerTabIndex.ab.index;
     List<Widget> actions = [
-      const PeerSearchBar(),
+      PeerSearchBar(
+        alwaysExpanded: macAb,
+        width: macAb ? 200 : null,
+        hint: macAb ? translate('adoluna-search-global') : null,
+      ),
       if (model.currentTab == PeerTabIndex.ab.index)
         _createRefresh(
             index: PeerTabIndex.ab, loading: gFFI.abModel.currentAbLoading),
@@ -634,7 +644,7 @@ class _PeerTabPageState extends State<PeerTabPage>
     final List<Widget> dynamicActions = [
       if (model.currentTabCachedPeers.isNotEmpty) _createMultiSelection(),
       if (model.currentTab != PeerTabIndex.recent.index) PeerSortDropdown(),
-      if (model.currentTab == PeerTabIndex.ab.index) _toggleTags()
+      if (model.currentTab == PeerTabIndex.ab.index && !macAb) _toggleTags()
     ];
     final rightWidth = availableWidth -
         searchWidth -
@@ -661,7 +671,15 @@ class _PeerTabPageState extends State<PeerTabPage>
 }
 
 class PeerSearchBar extends StatefulWidget {
-  const PeerSearchBar({Key? key}) : super(key: key);
+  final bool alwaysExpanded;
+  final double? width;
+  final String? hint;
+  const PeerSearchBar({
+    Key? key,
+    this.alwaysExpanded = false,
+    this.width,
+    this.hint,
+  }) : super(key: key);
 
   @override
   State<StatefulWidget> createState() => _PeerSearchBarState();
@@ -669,6 +687,20 @@ class PeerSearchBar extends StatefulWidget {
 
 class _PeerSearchBarState extends State<PeerSearchBar> {
   var drawer = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.alwaysExpanded) drawer = true;
+  }
+
+  @override
+  void didUpdateWidget(covariant PeerSearchBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.alwaysExpanded && !drawer) {
+      drawer = true;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -699,7 +731,8 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
           extentOffset: peerSearchTextController.value.text.length);
     });
     return Obx(() => Container(
-          width: stateGlobal.isPortrait.isTrue ? 120 : 140,
+          width: widget.width ??
+              (stateGlobal.isPortrait.isTrue ? 120 : 140),
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.background,
             borderRadius: BorderRadius.circular(6),
@@ -734,8 +767,9 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
                         decoration: InputDecoration(
                           contentPadding:
                               const EdgeInsets.symmetric(vertical: 6),
-                          hintText:
-                              focused.value ? null : translate("Search ID"),
+                          hintText: focused.value
+                              ? null
+                              : (widget.hint ?? translate("Search ID")),
                           hintStyle: TextStyle(
                               fontSize: 14, color: Theme.of(context).hintColor),
                           border: InputBorder.none,
@@ -751,7 +785,7 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
                         setState(() {
                           peerSearchTextController.clear();
                           peerSearchText.value = "";
-                          drawer = false;
+                          if (!widget.alwaysExpanded) drawer = false;
                         });
                       },
                       icon: Tooltip(

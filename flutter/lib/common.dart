@@ -1689,16 +1689,24 @@ Future<bool> matchPeer(
   if (peer.id.toLowerCase().contains(searchText)) {
     return true;
   }
+  final compact = searchText.replaceAll(' ', '');
+  if (formatID(peer.id).replaceAll(' ', '').toLowerCase().contains(compact) ||
+      peer.id.replaceAll(' ', '').toLowerCase().contains(compact)) {
+    return true;
+  }
   if (peer.hostname.toLowerCase().contains(searchText) ||
       peer.username.toLowerCase().contains(searchText)) {
     return true;
   }
-  if (peer.alias.toLowerCase().contains(searchText)) {
+  if (peer.alias.toLowerCase().contains(searchText) ||
+      peer.alias.replaceAll(' ', '').toLowerCase().contains(compact)) {
     return true;
   }
-  // Adoluna b80: store name (address-book tag) is searchable
+  // Adoluna b80/b112: store / merchant name (address-book tag) is searchable
   if (peerTabIndex == PeerTabIndex.ab &&
-      peer.tags.any((t) => t.toString().toLowerCase().contains(searchText))) {
+      peer.tags.any((t) =>
+          t.toString().toLowerCase().contains(searchText) ||
+          t.toString().replaceAll(' ', '').toLowerCase().contains(compact))) {
     return true;
   }
   if (peerTabShowNote(peerTabIndex) &&
