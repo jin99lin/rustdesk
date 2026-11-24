@@ -906,6 +906,10 @@ pub fn get_langs() -> String {
     let mut x: Vec<(&str, String)> = crate::lang::LANGS
         .iter()
         .filter(|a| !hide_cjk || !crate::lang::is_cjk_lang(a.0))
+        .filter(|a| {
+            // iOS controller: only Simplified Chinese and English in Settings.
+            !cfg!(target_os = "ios") || a.0 == "en" || a.0 == "zh-cn"
+        })
         .map(|a| (a.0, format!("{} ({})", a.1, a.0)))
         .collect();
     x.sort_by(|a, b| a.0.cmp(b.0));

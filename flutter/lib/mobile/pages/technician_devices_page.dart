@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:flutter_hbb/common.dart';
@@ -41,16 +43,28 @@ class TechnicianDevicesPage extends StatefulWidget implements PageShape {
 
 enum _ChipFilter { all, onlineFirst, recent, favorite }
 
-class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
+class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
+    with WidgetsBindingObserver {
   final _search = TextEditingController();
   final _storeSearch = TextEditingController();
   _ChipFilter _chip = _ChipFilter.all;
   String? _storeFilter; // null = all stores
   Set<String> _favIds = {};
+  Timer? _onlineTimer;
+  bool _onlineLoopStarted = false;
+  bool _appActive = true;
+  DateTime _lastOnlineQuery = DateTime.fromMillisecondsSinceEpoch(0);
+  Duration _onlineInterval = const Duration(seconds: 6);
+  static const _kQueryOnlines = 'callback_query_onlines';
+  static const _kOnlineHandler = 'technician_devices';
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    platformFFI.registerEventHandler(_kQueryOnlines, _kOnlineHandler, (evt) async {
+      _applyOnlineStates(evt);
+    });
     _search.addListener(() => setState(() {}));
     _refreshFavs();
     WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
@@ -76,9 +90,73 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    platformFFI.unregisterEventHandler(_kQueryOnlines, _kOnlineHandler);
+    _onlineTimer?.cancel();
     _search.dispose();
     _storeSearch.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _appActive = true;
+      _queryOnlines();
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _appActive = false;
+    }
+  }
+
+  void _applyOnlineStates(Map<String, dynamic> evt) {
+    final onlines = (evt['onlines'] as String? ?? '')
+        .split(',')
+        .where((s) => s.isNotEmpty)
+        .toSet();
+    final offlines = (evt['offlines'] as String? ?? '')
+        .split(',')
+        .where((s) => s.isNotEmpty)
+        .toSet();
+    var changed = false;
+    for (final p in gFFI.abModel.currentAbPeers) {
+      if (onlines.contains(p.id) && !p.online) {
+        p.online = true;
+        changed = true;
+      } else if (offlines.contains(p.id) && p.online) {
+        p.online = false;
+        changed = true;
+      }
+    }
+    if (changed && mounted) setState(() {});
+  }
+
+  void _queryOnlines() {
+    if (!gFFI.userModel.isLogin) return;
+    final ids = gFFI.abModel.currentAbPeers.map((p) => p.id).toList();
+    if (ids.isEmpty) return;
+    bind.queryOnlines(ids: ids);
+    _lastOnlineQuery = DateTime.now();
+  }
+
+  Future<void> _ensureOnlineLoop() async {
+    if (!_onlineLoopStarted) {
+      _onlineLoopStarted = true;
+      try {
+        final pub = await bind.mainIsUsingPublicServer();
+        _onlineInterval =
+            Duration(seconds: pub ? 20 : 6);
+      } catch (_) {}
+      _onlineTimer?.cancel();
+      _onlineTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!_appActive || !mounted || !gFFI.userModel.isLogin) return;
+        if (DateTime.now().difference(_lastOnlineQuery) >= _onlineInterval) {
+          _queryOnlines();
+        }
+      });
+    }
+    _queryOnlines();
   }
 
   String _storeName(Peer p) {
@@ -105,10 +183,14 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
     try {
       await gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false);
       await gFFI.abModel.selectPreferredSharedAb();
+      // Keep the shared Peers model on the current book so online callbacks
+      // also update the same Peer objects Android uses.
+      await platformFFI.tryHandle({'name': 'load_address_book_peers'});
     } catch (e) {
       debugPrint('technician devices load books: $e');
     }
     if (mounted) setState(() {});
+    await _ensureOnlineLoop();
   }
 
   String _deviceTitle(Peer p) {

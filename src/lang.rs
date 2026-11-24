@@ -128,7 +128,41 @@ pub(crate) fn is_cjk_lang(lang_or_locale: &str) -> bool {
     matches!(lang.as_str(), "zh" | "ja" | "ko")
 }
 
+pub(crate) fn is_simplified_chinese_locale(locale: &str) -> bool {
+    let loc = locale.to_lowercase();
+    if !loc.starts_with("zh") {
+        return false;
+    }
+    // Traditional Chinese variants should not count as 简体中文.
+    !(loc.contains("tw")
+        || loc.contains("hk")
+        || loc.contains("hant")
+        || loc.contains("mo"))
+}
+
+/// iOS controller Settings only offer 简体中文 and English. Follow-system
+/// (empty or "default") uses 简体中文 when the system is Simplified Chinese,
+/// otherwise English. Any previously saved unsupported language also falls
+/// back to English.
+pub(crate) fn restrict_ios_controller_lang(saved_lang: &str, locale: &str) -> String {
+    let saved = saved_lang.to_lowercase();
+    if saved == "zh-cn" {
+        return "zh-cn".to_owned();
+    }
+    if saved == "en" {
+        return "en".to_owned();
+    }
+    if (saved.is_empty() || saved == "default") && is_simplified_chinese_locale(locale) {
+        "zh-cn".to_owned()
+    } else {
+        "en".to_owned()
+    }
+}
+
 fn resolve_lang(saved_lang: &str, locale: &str, cjk_fallback: bool) -> String {
+    if cfg!(target_os = "ios") {
+        return restrict_ios_controller_lang(saved_lang, locale);
+    }
     let locale = locale.to_lowercase();
     let mut lang = saved_lang.to_lowercase();
     if cjk_fallback && is_cjk_lang(&lang) {
@@ -382,5 +416,35 @@ mod test {
 
         assert_eq!(f("pt-br", "pt-PT", false), "pt-br");
         assert_eq!(f("pt-pt", "pt-BR", false), "pt-pt");
+    }
+
+    #[test]
+    fn test_restrict_ios_controller_lang() {
+        use super::restrict_ios_controller_lang as f;
+
+        assert_eq!(f("zh-cn", "en-US"), "zh-cn");
+        assert_eq!(f("en", "zh_CN"), "en");
+        assert_eq!(f("", "zh_CN"), "zh-cn");
+        assert_eq!(f("", "zh-Hans-CN"), "zh-cn");
+        assert_eq!(f("default", "zh-CN"), "zh-cn");
+        assert_eq!(f("", "en-US"), "en");
+        assert_eq!(f("default", "ja-JP"), "en");
+        assert_eq!(f("", "zh_TW"), "en");
+        assert_eq!(f("", "zh-Hant"), "en");
+        assert_eq!(f("fr", "zh_CN"), "en");
+        assert_eq!(f("zh-tw", "zh_CN"), "en");
+    }
+
+    #[test]
+    fn test_is_simplified_chinese_locale() {
+        use super::is_simplified_chinese_locale as f;
+
+        assert!(f("zh_CN"));
+        assert!(f("zh-Hans-CN"));
+        assert!(f("zh"));
+        assert!(!f("zh_TW"));
+        assert!(!f("zh-Hant"));
+        assert!(!f("zh-HK"));
+        assert!(!f("en-US"));
     }
 }
