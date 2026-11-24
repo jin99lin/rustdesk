@@ -9,6 +9,7 @@ import '../../common/widgets/chat_page.dart';
 import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
 import 'connection_page.dart';
+import 'technician_devices_page.dart';
 
 abstract class PageShape extends Widget {
   final String title = "";
@@ -44,6 +45,13 @@ class HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     initPages();
+    // Swap the first tab when a technician logs in or out. Merchants typically
+    // stay logged out and keep ConnectionPage.
+    if (isAndroid) {
+      ever(gFFI.userModel.userName, (_) {
+        if (mounted) refreshPages();
+      });
+    }
     // Adoluna: on launch, if setup is incomplete, jump to "Share screen" so the
     // guided permission setup (ServerPage) starts by itself. Once per launch.
     if (isAndroid && !bind.isOutgoingOnly() && !_adolunaAutoJumped) {
@@ -73,9 +81,15 @@ class HomePageState extends State<HomePage> {
   void initPages() {
     _pages.clear();
     if (!bind.isIncomingOnly()) {
-      _pages.add(ConnectionPage(
-        appBarActions: [],
-      ));
+      // Technician list only after login. Logged-out (typical merchant) users
+      // keep the original ConnectionPage. Do not change incoming/outgoing flags.
+      if (isAndroid && gFFI.userModel.isLogin) {
+        _pages.add(TechnicianDevicesPage());
+      } else {
+        _pages.add(ConnectionPage(
+          appBarActions: [],
+        ));
+      }
     }
     if (isAndroid && !bind.isOutgoingOnly()) {
       _chatPageTabIndex = _pages.length;
