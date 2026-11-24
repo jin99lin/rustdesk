@@ -705,6 +705,59 @@ class AbModel {
 // #endregion
 
 // #region tools
+
+  static const preferredSharedAbs = ['全部商家 / All Merchants', '商家 / Merchants'];
+
+  /// Same rule as the Android technician list (b103): prefer 全部商家, then
+  /// 商家 / Merchants, then the first non-empty shared book. Personal address
+  /// books are typically empty for staff accounts.
+  Future<void> selectPreferredSharedAb() async {
+    if (legacyMode.value || !listInitialized) return;
+    final names = addressBookNames();
+    if (names.isEmpty) return;
+    final personal = personalAddressBookName();
+    final current = currentName.value;
+    if (preferredSharedAbs.contains(current) ||
+        (current.isNotEmpty &&
+            current != personal &&
+            names.contains(current) &&
+            !(addressbooks[current]?.isPersonal() ?? true))) {
+      if (!this.current.initialized) {
+        await this.current.pullAb(quiet: false);
+      }
+      return;
+    }
+    String? pick;
+    for (final n in preferredSharedAbs) {
+      if (names.contains(n)) {
+        pick = n;
+        break;
+      }
+    }
+    if (pick == null) {
+      for (final n in names) {
+        final ab = addressbooks[n];
+        if (ab == null || ab.isPersonal()) continue;
+        if (!ab.initialized) {
+          await ab.pullAb(quiet: true);
+        }
+        if (ab.peers.isNotEmpty) {
+          pick = n;
+          break;
+        }
+      }
+    }
+    pick ??= names.cast<String?>().firstWhere(
+        (n) =>
+            n != personal &&
+            !(addressbooks[n]?.isPersonal() ?? true),
+        orElse: () => null);
+    if (pick != null && pick.isNotEmpty && pick != current) {
+      await setCurrentName(pick);
+      bind.setLocalFlutterOption(k: kOptionCurrentAbName, v: pick);
+    }
+  }
+
   Peer? find(String id) {
     return currentAbPeers.firstWhereOrNull((e) => e.id == id);
   }

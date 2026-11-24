@@ -15,12 +15,19 @@ import 'package:flutter_hbb/mobile/pages/home_page.dart';
 const Color kAdolunaRed = Color(0xFFFF2400);
 const Color kAdolunaRedSoft = Color(0xFFFFF1EC);
 
+String _nDevicesPicker(int n) => translate('{$n} devices');
+
+const _kUngroupedStore = '__ungrouped__';
+
+String _labelStore(String name) =>
+    name == _kUngroupedStore ? translate('adoluna-ungrouped') : name;
+
 /// iOS / outgoing-only technician home: search, store sections, filters, store picker.
 class TechnicianDevicesPage extends StatefulWidget implements PageShape {
-  TechnicianDevicesPage({super.key});
+  TechnicianDevicesPage({super.key}) : title = translate('Devices');
 
   @override
-  final String title = '设备';
+  final String title;
 
   @override
   final Widget icon = const Icon(Icons.grid_view_rounded);
@@ -53,9 +60,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
     try {
       bind.mainLoadRecentPeers();
       bind.mainLoadFavPeers();
-      if (gFFI.userModel.userName.value.isNotEmpty) {
-        await gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false);
-      }
+      await _loadBooks();
     } catch (e) {
       debugPrint('technician devices bootstrap: $e');
     }
@@ -83,7 +88,27 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
       if (i > 0) return '${s.substring(0, i)} · ${s.substring(i + 3)}';
     }
     if (p.device_group_name.isNotEmpty) return p.device_group_name;
-    return '未分组';
+    return _kUngroupedStore;
+  }
+
+  String _storeLabel(String name) => _labelStore(name);
+
+  String _nStores(int n) => translate('{$n} stores');
+
+  String _nDevices(int n) => translate('{$n} devices');
+
+  String _nDevicesOnline(int n, int online) =>
+      '${translate('{$n} devices')} · $online ${translate('adoluna-online')}';
+
+  Future<void> _loadBooks() async {
+    if (!gFFI.userModel.isLogin) return;
+    try {
+      await gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false);
+      await gFFI.abModel.selectPreferredSharedAb();
+    } catch (e) {
+      debugPrint('technician devices load books: $e');
+    }
+    if (mounted) setState(() {});
   }
 
   String _deviceTitle(Peer p) {
@@ -117,7 +142,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
     if (q.isEmpty) return true;
     final nq = q.toLowerCase().replaceAll(' ', '');
     final id = p.id.replaceAll(' ', '').toLowerCase();
-    final store = _storeName(p).toLowerCase();
+    final store = _storeLabel(_storeName(p)).toLowerCase();
     final title = _deviceTitle(p).toLowerCase();
     final pos = _posLabel(p).toLowerCase().replaceAll(' ', '');
     final host = p.hostname.toLowerCase();
@@ -203,20 +228,20 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
 
   Future<void> _login() async {
     await loginDialog();
-    if (gFFI.userModel.userName.value.isNotEmpty) {
-      await gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false);
-    }
+    await _loadBooks();
     if (mounted) setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
-    final loggedIn = gFFI.userModel.userName.value.isNotEmpty;
     return Obx(() {
-      // Depend on AB + login observables.
+      // Depend on AB + login observables so the list updates after auto-pick.
       final _ = gFFI.userModel.userName.value;
       final __ = gFFI.abModel.currentAbPeers.length;
-      if (!loggedIn && gFFI.userModel.userName.value.isEmpty) {
+      final ___ = gFFI.abModel.currentName.value;
+      final ____ = gFFI.abModel.currentAbLoading.value;
+      final _____ = gFFI.abModel.abPullError.value;
+      if (gFFI.userModel.userName.value.isEmpty) {
         return _LoginGate(onLogin: _login);
       }
       final isPad = MediaQuery.of(context).size.shortestSide >= 600;
@@ -233,8 +258,11 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
         _chips(),
         _storeButton(),
         Expanded(
-          child: groups.isEmpty
-              ? _empty()
+          child: RefreshIndicator(
+            color: kAdolunaRed,
+            onRefresh: _loadBooks,
+            child: groups.isEmpty
+              ? ListView(physics: const AlwaysScrollableScrollPhysics(), children: [SizedBox(height: 240, child: _empty())])
               : Stack(
                   children: [
                     ListView.builder(
@@ -251,6 +279,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
                       _indexRail(_allStores()),
                   ],
                 ),
+          ),
         ),
       ],
     );
@@ -261,7 +290,11 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
     final q = _storeSearch.text.trim().toLowerCase();
     final filtered = q.isEmpty
         ? stores
-        : stores.where((s) => s.toLowerCase().contains(q)).toList();
+        : stores
+            .where((s) =>
+                s.toLowerCase().contains(q) ||
+                _storeLabel(s).toLowerCase().contains(q))
+            .toList();
     final selected = _storeFilter ?? (filtered.isNotEmpty ? filtered.first : null);
     // When a store is implied (first) on iPad, show its devices.
     final deviceStore = _storeFilter ?? selected;
@@ -281,15 +314,15 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                child: _boxSearch(_storeSearch, '搜索店铺'),
+                child: _boxSearch(_storeSearch, translate('adoluna-search-stores')),
               ),
               ListTile(
                 dense: true,
                 selected: _storeFilter == null,
                 selectedTileColor: kAdolunaRedSoft,
-                title: const Text('全部店铺',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
-                trailing: Text('${stores.length} 家',
+                title: Text(translate('adoluna-all-stores'),
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                trailing: Text(_nStores(stores.length),
                     style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12)),
                 onTap: () => setState(() => _storeFilter = null),
               ),
@@ -327,12 +360,12 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
                               dense: true,
                               selected: selectedThis,
                               selectedTileColor: kAdolunaRedSoft,
-                              title: Text(name,
+                              title: Text(_storeLabel(name),
                                   style: TextStyle(
                                       fontWeight: FontWeight.w600,
                                       color: selectedThis ? kAdolunaRed : null)),
                               subtitle: Text(
-                                  '${peers.length} 台 · $online 在线',
+                                  _nDevicesOnline(peers.length, online),
                                   style: const TextStyle(fontSize: 11)),
                               trailing: Text('${peers.length}',
                                   style: const TextStyle(
@@ -366,14 +399,14 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
                         padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                         children: [
                           if (deviceStore != null) ...[
-                            Text(deviceStore,
+                            Text(_storeLabel(deviceStore),
                                 style: const TextStyle(
                                     fontSize: 28,
                                     fontWeight: FontWeight.w700,
                                     letterSpacing: -0.6)),
                             const SizedBox(height: 4),
                             Text(
-                              '${shown.isEmpty ? 0 : shown.first.peers.length} 台设备',
+                              _nDevices(shown.isEmpty ? 0 : shown.first.peers.length),
                               style: const TextStyle(
                                   color: Color(0xFF6C6C70), fontSize: 13),
                             ),
@@ -393,7 +426,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
   Widget _searchBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: _boxSearch(_search, '搜索店名、设备号、POS 编号'),
+      child: _boxSearch(_search, translate('adoluna-search-devices')),
     );
   }
 
@@ -477,10 +510,10 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            chip('全部', _ChipFilter.all),
-            chip('在线优先', _ChipFilter.onlineFirst, dot: true),
-            chip('最近', _ChipFilter.recent),
-            chip('收藏', _ChipFilter.favorite),
+            chip(translate('All'), _ChipFilter.all),
+            chip(translate('adoluna-online-first'), _ChipFilter.onlineFirst, dot: true),
+            chip(translate('Recent'), _ChipFilter.recent),
+            chip(translate('Favorites'), _ChipFilter.favorite),
           ],
         ),
       ),
@@ -488,7 +521,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
   }
 
   Widget _storeButton() {
-    final label = _storeFilter ?? '全部店铺';
+    final label = _storeFilter == null ? translate('adoluna-all-stores') : _storeLabel(_storeFilter!);
     final n = _allStores().length;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
@@ -507,18 +540,18 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Row(
                 children: [
-                  const Text('店铺',
+                  Text(translate('adoluna-stores'),
                       style: TextStyle(fontSize: 13, color: Color(0xFF8E8E93))),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      _storeFilter == null ? '全部店铺 · $n 家' : label,
+                      _storeFilter == null ? '${translate('adoluna-all-stores')} · ${_nStores(n)}' : label,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                           fontSize: 15, fontWeight: FontWeight.w600),
                     ),
                   ),
-                  const Text('选择 ›',
+                  Text('${translate('adoluna-choose')} ›',
                       style: TextStyle(fontSize: 14, color: Color(0xFF8E8E93))),
                 ],
               ),
@@ -584,11 +617,11 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
                   child: Row(
                     children: [
                       Expanded(
-                        child: Text(g.name,
+                        child: Text(_storeLabel(g.name),
                             style: const TextStyle(
                                 fontSize: 15, fontWeight: FontWeight.w700)),
                       ),
-                      Text('${g.peers.length} 台 · $online 在线',
+                      Text(_nDevicesOnline(g.peers.length, online),
                           style: const TextStyle(
                               fontSize: 12, color: Color(0xFF8E8E93))),
                     ],
@@ -609,7 +642,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
     final pos = _posLabel(p);
     final meta = [
       if (pos.isNotEmpty) pos,
-      '设备号 ${formatID(p.id)}',
+      translate('adoluna-device-id').replaceAll('{}', formatID(p.id)),
     ].join(' · ');
     return InkWell(
       onTap: () => connect(context, p.id),
@@ -709,7 +742,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
             ),
           ),
           const SizedBox(width: 4),
-          Text(online ? '在线' : '离线',
+          Text(online ? translate('adoluna-online') : translate('adoluna-offline'),
               style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -739,20 +772,20 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
                   ),
                   child: Column(
                     children: [
-                      _sheetItem(ctx, '连接', () => connect(context, p.id),
+                      _sheetItem(ctx, translate('Connect'), () => connect(context, p.id),
                           primary: true),
-                      _sheetItem(ctx, '查看摄像头',
+                      _sheetItem(ctx, translate('View camera'),
                           () => connect(context, p.id, isViewCamera: true)),
-                      _sheetItem(ctx, '终端',
+                      _sheetItem(ctx, translate('Terminal'),
                           () => connect(context, p.id, isTerminal: true)),
-                      _sheetItem(ctx, '始终使用中继', () async {
+                      _sheetItem(ctx, translate('Always connect via relay'), () async {
                         final cur = await bind.mainGetPeerOption(
                             id: p.id, key: kOptionForceAlwaysRelay);
                         final next = cur == 'Y' ? 'N' : 'Y';
                         await bind.mainSetPeerOption(
                             id: p.id, key: kOptionForceAlwaysRelay, value: next);
                         if (mounted) {
-                          showToast(next == 'Y' ? '已开启始终中继' : '已关闭始终中继');
+                          showToast(next == 'Y' ? translate('adoluna-relay-on') : translate('adoluna-relay-off'));
                         }
                       }),
                       _sheetItem(ctx, translate('Exist in'), () {
@@ -783,7 +816,7 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
                       height: 56,
                       width: double.infinity,
                       child: Center(
-                        child: Text('取消',
+                        child: Text(translate('Cancel'),
                             style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.w600,
@@ -855,9 +888,12 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage> {
 
   Widget _empty() {
     final loading = gFFI.abModel.currentAbLoading.value;
+    final err = gFFI.abModel.abPullError.value;
     return Center(
       child: Text(
-        loading ? '正在加载设备…' : '没有符合条件的设备',
+        err.isNotEmpty
+            ? err
+            : (loading ? translate('adoluna-loading-devices') : translate('adoluna-no-devices')),
         style: const TextStyle(color: Color(0xFF8E8E93)),
       ),
     );
@@ -910,7 +946,7 @@ class _LoginGate extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                   letterSpacing: -0.6)),
           const SizedBox(height: 8),
-          const Text('登录后即可连接分配给你的商家设备',
+          Text(translate('adoluna-login-hint'),
               style: TextStyle(fontSize: 15, color: Color(0xFF6C6C70))),
           const SizedBox(height: 36),
           Padding(
@@ -927,14 +963,14 @@ class _LoginGate extends StatelessWidget {
                   elevation: 0,
                 ),
                 onPressed: onLogin,
-                child: const Text('登录',
+                child: Text(translate('Login'),
                     style:
                         TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
               ),
             ),
           ),
           const SizedBox(height: 16),
-          const Text('服务器已内置，无需填写地址或公钥',
+          Text(translate('adoluna-server-builtin'),
               style: TextStyle(fontSize: 12, color: Color(0xFF8E8E93))),
           const Spacer(),
         ],
@@ -978,7 +1014,11 @@ class _StorePickerSheetState extends State<_StorePickerSheet> {
     final qq = _q.text.trim().toLowerCase();
     final stores = qq.isEmpty
         ? widget.stores
-        : widget.stores.where((s) => s.toLowerCase().contains(qq)).toList();
+        : widget.stores
+            .where((s) =>
+                s.toLowerCase().contains(qq) ||
+                _labelStore(s).toLowerCase().contains(qq))
+            .toList();
     return SizedBox(
       height: MediaQuery.of(context).size.height * 0.88,
       child: Column(
@@ -995,15 +1035,15 @@ class _StorePickerSheetState extends State<_StorePickerSheet> {
             child: Row(
               children: [
                 const SizedBox(width: 48),
-                const Expanded(
-                  child: Text('选择店铺',
+                Expanded(
+                  child: Text(translate('adoluna-select-store'),
                       textAlign: TextAlign.center,
-                      style:
-                          TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                      style: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.w700)),
                 ),
                 TextButton(
                   onPressed: () => Navigator.pop(context, widget.selected ?? ''),
-                  child: const Text('完成',
+                  child: Text(translate('Done'),
                       style: TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w600,
@@ -1032,7 +1072,7 @@ class _StorePickerSheetState extends State<_StorePickerSheet> {
                       decoration: const InputDecoration(
                         isDense: true,
                         border: InputBorder.none,
-                        hintText: '搜索店铺',
+                        hintText: translate('adoluna-search-stores'),
                         hintStyle:
                             TextStyle(color: Color(0xFF8E8E93), fontSize: 15),
                       ),
@@ -1056,7 +1096,7 @@ class _StorePickerSheetState extends State<_StorePickerSheet> {
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
-                      Text('全部店铺',
+                      Text(translate('adoluna-all-stores'),
                           style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
@@ -1064,7 +1104,7 @@ class _StorePickerSheetState extends State<_StorePickerSheet> {
                                   ? kAdolunaRed
                                   : const Color(0xFF1C1C1E))),
                       const Spacer(),
-                      Text('${widget.totalStores} 家 · ${widget.totalDevices} 台',
+                      Text('${translate('{${widget.totalStores}} stores')} · ${translate('{${widget.totalDevices}} devices')}',
                           style: const TextStyle(
                               fontSize: 13, color: Color(0xFF8E8E93))),
                     ],
@@ -1097,14 +1137,14 @@ class _StorePickerSheetState extends State<_StorePickerSheet> {
                     Material(
                       color: Colors.white,
                       child: ListTile(
-                        title: Text(name,
+                        title: Text(_labelStore(name),
                             style: TextStyle(
                                 fontWeight: on ? FontWeight.w600 : FontWeight.w500,
                                 color: on ? kAdolunaRed : null)),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text('${widget.countOf(name)} 台',
+                            Text(_nDevicesPicker(widget.countOf(name)),
                                 style: const TextStyle(
                                     fontSize: 13, color: Color(0xFF8E8E93))),
                             if (on)
