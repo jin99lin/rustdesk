@@ -47,7 +47,6 @@ enum _ChipFilter { all, onlineFirst, recent, favorite }
 class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
     with WidgetsBindingObserver {
   final _search = TextEditingController();
-  final _storeSearch = TextEditingController();
   _ChipFilter _chip = _ChipFilter.all;
   String? _storeFilter; // null = all stores
   Set<String> _favIds = {};
@@ -100,7 +99,6 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
     platformFFI.unregisterEventHandler(_kQueryOnlines, _kOnlineHandler);
     _onlineTimer?.cancel();
     _search.dispose();
-    _storeSearch.dispose();
     super.dispose();
   }
 
@@ -496,15 +494,16 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
       if (gFFI.userModel.userName.value.isEmpty) {
         return _LoginGate(onLogin: _login);
       }
-      final isPad = MediaQuery.of(context).size.shortestSide >= 600;
-      if (isPad) return _buildIpad(context);
-      return _buildPhone(context);
+      return _buildDeviceList(context);
     });
   }
 
-  Widget _buildPhone(BuildContext context) {
+  /// Same merchant > store list on iPhone and iPad (portrait and landscape).
+  /// Wide screens center the column so rows stay readable.
+  Widget _buildDeviceList(BuildContext context) {
     final groups = _merchantGroups();
-    return Column(
+    const maxListWidth = 800.0;
+    final body = Column(
       children: [
         _searchBar(),
         _chips(),
@@ -546,149 +545,11 @@ class _TechnicianDevicesPageState extends State<TechnicianDevicesPage>
         ),
       ],
     );
-  }
-
-  Widget _buildIpad(BuildContext context) {
-    final stores = _allStores();
-    final q = _storeSearch.text.trim().toLowerCase();
-    final filtered = q.isEmpty
-        ? stores
-        : stores
-            .where((s) =>
-                s.toLowerCase().contains(q) ||
-                _storeLabel(s).toLowerCase().contains(q))
-            .toList();
-    final selected = _storeFilter ?? (filtered.isNotEmpty ? filtered.first : null);
-    // When a store is implied (first) on iPad, show its devices.
-    final deviceStore = _storeFilter ?? selected;
-    final merchGroups = _merchantGroups()
-        .where((g) => deviceStore == null || g.stores.any((s) => s.name == deviceStore))
-        .map((g) {
-      if (deviceStore == null) return g;
-      final only = g.stores.where((s) => s.name == deviceStore).toList();
-      return _MerchantGroup(
-        name: only.first.name,
-        letter: g.letter,
-        stores: only,
-        isMerchant: false,
-      );
-    }).toList();
-    final shown = merchGroups;
-
-    return Row(
-      children: [
-        SizedBox(
-          width: 320,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                child: _boxSearch(_storeSearch, translate('adoluna-search-stores')),
-              ),
-              ListTile(
-                dense: true,
-                selected: _storeFilter == null,
-                selectedTileColor: kAdolunaRedSoft,
-                title: Text(translate('adoluna-all-stores'),
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-                trailing: Text(_nStores(stores.length),
-                    style: const TextStyle(color: Color(0xFF8E8E93), fontSize: 12)),
-                onTap: () => setState(() => _storeFilter = null),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: Stack(
-                  children: [
-                    ListView.builder(
-                      padding: const EdgeInsets.only(right: 16, bottom: 16),
-                      itemCount: filtered.length,
-                      itemBuilder: (ctx, i) {
-                        final name = filtered[i];
-                        final letter = _letter(name);
-                        final showLetter = i == 0 ||
-                            _letter(filtered[i - 1]) != letter;
-                        final peers = gFFI.abModel.currentAbPeers
-                            .where((p) => _storeName(p) == name)
-                            .toList();
-                        final online = peers.where((p) => p.online).length;
-                        final selectedThis = name == deviceStore && _storeFilter != null;
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (showLetter)
-                              Container(
-                                padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
-                                color: const Color(0xFFFAFAFB),
-                                child: Text(letter,
-                                    style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: Color(0xFF6C6C70))),
-                              ),
-                            ListTile(
-                              dense: true,
-                              selected: selectedThis,
-                              selectedTileColor: kAdolunaRedSoft,
-                              title: Text(_storeLabel(name),
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      color: selectedThis ? kAdolunaRed : null)),
-                              subtitle: Text(
-                                  _nDevicesOnline(peers.length, online),
-                                  style: const TextStyle(fontSize: 11)),
-                              trailing: Text('${peers.length}',
-                                  style: const TextStyle(
-                                      color: Color(0xFF8E8E93), fontSize: 12)),
-                              onTap: () => setState(() => _storeFilter = name),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                    _indexRail(stores, onTap: (letter) {
-                      final i = filtered.indexWhere((s) => _letter(s) == letter);
-                      // visual only in listView without controller; keep simple
-                    }),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: Column(
-            children: [
-              _searchBar(),
-              _chips(),
-              Expanded(
-                child: shown.isEmpty
-                    ? _empty()
-                    : ListView(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                        children: [
-                          if (deviceStore != null) ...[
-                            Text(_storeLabel(deviceStore),
-                                style: const TextStyle(
-                                    fontSize: 28,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: -0.6)),
-                            const SizedBox(height: 4),
-                            Text(
-                              _nDevices(shown.isEmpty ? 0 : _peerCount(shown.first)),
-                              style: const TextStyle(
-                                  color: Color(0xFF6C6C70), fontSize: 13),
-                            ),
-                            const SizedBox(height: 12),
-                          ],
-                          ...shown.map((g) => _merchantSection(g, showLetter: false)),
-                        ],
-                      ),
-              ),
-            ],
-          ),
-        ),
-      ],
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: maxListWidth),
+        child: body,
+      ),
     );
   }
 
